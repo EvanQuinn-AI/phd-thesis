@@ -52,7 +52,7 @@ All footage was recorded in controlled gym environments with written or verbal c
 Reproduction Note
 The training, validation and test images above are exactly those referenced in Chapters 4–6. Clone the thesis code repository, set the DATA_DIR environment variable to the directory structure shown in the Directory Map, and run train_yolo.py --config configs/yolo.yaml to reproduce baseline results.
 GitHub Code Repository
-1.	Clone repo ➜ git clone https://github.com/EvanQuinn-AI/thesis-projects.git
+1.	Clone repo ➜ git clone [https://github.com/EvanQuinn-AI/thesis-projects.git](https://github.com/EvanQuinn-AI/phd-thesis.git)
 2.	Create virtual env ➜ conda env create -f setup-files/environment.yml or pip install -r requirements
 3.	Download dataset to dataset/ and weights to models/ (setup script offers prompts).
 4.	Train ➜ python gpu-version/train.py --config configs/yolo.yaml
