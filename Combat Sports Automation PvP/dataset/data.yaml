@@ -1,0 +1,18 @@
+names:
+- boxing-bag
+- cross
+- high-guard
+- hook
+- kick
+- low-guard
+- person
+nc: 7
+roboflow:
+  license: Public Domain
+  project: combatsports
+  url: https://universe.roboflow.com/combatsports/combatsports/dataset/7
+  version: 7
+  workspace: combatsports
+test: C:/Users/epsq2/Desktop/Combat Sports Automation PvP/dataset/test/images
+train: C:/Users/epsq2/Desktop/Combat Sports Automation PvP/dataset/train/images
+val: C:/Users/epsq2/Desktop/Combat Sports Automation PvP/dataset/valid/images

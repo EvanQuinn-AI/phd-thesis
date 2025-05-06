@@ -1,0 +1,25 @@
+1. Open CMD - Check GPU Compatability
+nvidia-smi
+
+2. Install CUDA and cuDNN (Optional)
+You will need the CUDA toolkit and cuDNN (CUDA Deep Neural Network library) installed on your machine. 
+However, PyTorch installation generally takes care of this automatically if you choose the correct version.
+
+To manually install them:
+
+Download the latest CUDA toolkit from NVIDIA's CUDA Toolkit page. https://developer.nvidia.com/cuda-downloads
+Install cuDNN from NVIDIA cuDNN page.https://developer.nvidia.com/cudnn
+
+Make sure your environment variables (PATH, LD_LIBRARY_PATH, etc.) are properly set to include the CUDA installation path.
+
+2b. Install cuda pytorch support: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
+
+2c. Install other dependencies: pip install streamlit transformers opencv-python scikit-learn pandas matplotlib ipywidgets
+
+2d. Verify in python cuda is available: 
+
+import torch
+print(torch.cuda.is_available())  # Should return True if GPU is set up correctly
+
+
+Download Git: https://git-scm.com/downloads
