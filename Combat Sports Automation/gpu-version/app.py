@@ -278,43 +278,44 @@ def merge_overlapping_boxes(boxes):
 def process_video(video_path, model):
     class_names = st.session_state.get('yolo_classes', [])
     if not class_names:
-        st.error("No class names.")
+        st.error("No class names available.")
         return []
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        st.error(f"Error opening {video_path}")
+        st.error(f"Error opening video: {video_path}")
         return []
 
     os.makedirs("runs", exist_ok=True)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    base   = os.path.splitext(os.path.basename(video_path))[0]
-    out    = cv2.VideoWriter(f"runs/{base}.mp4", fourcc, fps, (w,h))
+    base = os.path.splitext(os.path.basename(video_path))[0]
+    out_path = f"runs/{base}_processed.mp4"
+    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
-    # state
     prev_frame_time = time.time()
-    frame_count    = 0
-    total_frames   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    counters       = {'punch': 0, 'kick-knee': 0}
-    in_event       = {'punch': False, 'kick-knee': False}
-    event_start    = {'punch': 0,     'kick-knee': 0}
-    min_event_dur  = {'punch': 2,     'kick-knee': 6}
-    gap_counter    = {'punch': 0,     'kick-knee': 0}
-    gap_tolerance  = {'punch': 1,     'kick-knee': 4}
+    frame_count = 0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    counters = {'punch': 0, 'kick-knee': 0}
+    in_event = {'punch': False, 'kick-knee': False}
+    event_start = {'punch': 0, 'kick-knee': 0}
+    min_event_dur = {'punch': 2, 'kick-knee': 6}
+    gap_counter = {'punch': 0, 'kick-knee': 0}
+    gap_tolerance = {'punch': 1, 'kick-knee': 4}
 
-    progress_bar   = st.progress(0)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     all_detections = []
 
-    def check_overlap_(action_boxes, bag_boxes, frame_):
-        for a in action_boxes:
-            for b in bag_boxes:
-                if boxes_intersect(a, b):
-                    ca = ((a[0]+a[2])//2, (a[1]+a[3])//2)
-                    cb = ((b[0]+b[2])//2, (b[1]+b[3])//2)
-                    cv2.line(frame_, ca, cb, (0,255,255), 2)
+    def check_overlap(action_boxes, bag_boxes, frame_img):
+        for a_box in action_boxes:
+            for b_box in bag_boxes:
+                if boxes_intersect(a_box, b_box):
+                    ca = ((a_box[0] + a_box[2]) // 2, (a_box[1] + a_box[3]) // 2)
+                    cb = ((b_box[0] + b_box[2]) // 2, (b_box[1] + b_box[3]) // 2)
+                    cv2.line(frame_img, ca, cb, (0, 255, 255), 2)
                     return True
         return False
 
@@ -323,69 +324,53 @@ def process_video(video_path, model):
         if not ret:
             break
 
-        # --- compute live FPS ---------------------------------
         new_frame_time = time.time()
-        fps = 1.0 / (new_frame_time - prev_frame_time)
+        elapsed = new_frame_time - prev_frame_time
+        fps = 1.0 / elapsed if elapsed > 0 else 0
         prev_frame_time = new_frame_time
-        # -------------------------------------------------------
 
-        # 1) YOLO + filter
-        dets     = yolo_inference(frame, model)
-        CONF_THR = 0.4
-        filtered = [d for d in dets if d[4] >= CONF_THR]
+        detections = yolo_inference(frame, model)
+        CONF_THRESH = 0.4
+        filtered = [d for d in detections if d[4] >= CONF_THRESH]
 
-        # 2) build & merge boxes
-        raw_bag   = [tuple(map(int,d[:4])) for d in filtered if int(d[5])==0]
-        raw_punch = [tuple(map(int,d[:4])) for d in filtered if int(d[5])==5]
-        raw_kick  = [tuple(map(int,d[:4])) for d in filtered if int(d[5])==2]
+        raw_bag = [tuple(map(int, d[:4])) for d in filtered if int(d[5]) == 0]
+        raw_punch = [tuple(map(int, d[:4])) for d in filtered if int(d[5]) == 5]
+        raw_kick = [tuple(map(int, d[:4])) for d in filtered if int(d[5]) == 2]
 
-        bag_boxes   = merge_overlapping_boxes(raw_bag)
+        bag_boxes = merge_overlapping_boxes(raw_bag)
         punch_boxes = merge_overlapping_boxes(raw_punch)
-        kick_boxes  = merge_overlapping_boxes(raw_kick)
+        kick_boxes = merge_overlapping_boxes(raw_kick)
 
-        # draw raw detections *with* confidences
-        for x1f,y1f,x2f,y2f,conf,cls in filtered:
-            cls = int(cls)
-            color = {0:(0,255,0),5:(255,0,255),2:(0,255,255)}.get(cls, (0,0,255))
-            label = class_names[cls]
-            x1,y1,x2,y2 = map(int,(x1f,y1f,x2f,y2f))
-            cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
-            cv2.putText(frame, f"{label} {conf:.2f}", (x1,y1-10),
+        for det in filtered:
+            x1, y1, x2, y2, conf, cls_id = map(float, det[:6])
+            cls_id = int(cls_id)
+            color = {
+                0: (0, 255, 0),    # bag
+                5: (255, 0, 255),  # punch
+                2: (0, 255, 255),  # kick
+                4: (255, 0, 0),    # person
+                1: (0, 128, 255),  # high-guard
+                3: (255, 165, 0)   # low-guard
+            }.get(cls_id, (0, 0, 255))
+            
+            x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            label = f"{class_names[cls_id]} {conf:.2f}"
+            cv2.putText(frame, label, (x1, y1-10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # then draw merged boxes (no text)
-        for cls_id, boxes in [(0, bag_boxes), (5, punch_boxes), (2, kick_boxes)]:
-            color = {0:(0,255,0),5:(255,0,255),2:(0,255,255)}[cls_id]
-            for x1,y1,x2,y2 in boxes:
-                cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
+        ov_punch = check_overlap(punch_boxes, bag_boxes, frame)
+        ov_kick = check_overlap(kick_boxes, bag_boxes, frame)
 
-        # 4) draw other classes
-        for x1f,y1f,x2f,y2f,conf,cls in filtered:
-            cls = int(cls)
-            if cls not in (0,2,5):
-                x1,y1,x2,y2 = map(int,(x1f,y1f,x2f,y2f))
-                color = {4:(255,0,0),1:(0,128,255),3:(255,165,0)}.get(cls,(0,0,255))
-                cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-                cv2.putText(frame,f"{class_names[cls]} {conf:.2f}",
-                            (x1,y1-10),cv2.FONT_HERSHEY_SIMPLEX,0.5,color,2)
-
-        # 5) check overlap
-        ov_punch   = check_overlap_(punch_boxes, bag_boxes,   frame)
-        ov_kickkne = check_overlap_(kick_boxes,  bag_boxes,   frame)
-
-        # 6) event + gap tolerance logic
-        for action, is_over in [('punch',ov_punch),('kick-knee',ov_kickkne)]:
+        for action, is_over in [('punch', ov_punch), ('kick-knee', ov_kick)]:
             if is_over:
-                # reset gap counter; start event if needed
                 gap_counter[action] = 0
                 if not in_event[action]:
-                    in_event[action]    = True
+                    in_event[action] = True
                     event_start[action] = frame_count
-
             else:
                 if in_event[action]:
                     gap_counter[action] += 1
-                    # only close event after N missed frames
                     if gap_counter[action] >= gap_tolerance[action]:
                         dur = frame_count - event_start[action]
                         if dur >= min_event_dur[action]:
@@ -393,47 +378,33 @@ def process_video(video_path, model):
                         in_event[action] = False
                         gap_counter[action] = 0
 
-        # 7) annotate & write
-        total = counters['punch'] + counters['kick-knee']
-        cv2.putText(frame,f"Hits: {total}",   (50,50),
-                    cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),2)
-        cv2.putText(frame,f"Punch: {counters['punch']}",(50,90),
-                    cv2.FONT_HERSHEY_SIMPLEX,1,(255,0,255),2)
-        cv2.putText(frame,f"Kick-Knee: {counters['kick-knee']}",(50,130),
-                    cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,255),2)
+        total_hits = counters['punch'] + counters['kick-knee']
+        cv2.putText(frame, f"Hits: {total_hits}", (50, 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(frame, f"Punch: {counters['punch']}", (50, 90), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+        cv2.putText(frame, f"Kick-Knee: {counters['kick-knee']}", (50, 130), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-        # — draw FPS top-right —
-        text       = f"FPS: {fps:.1f}"
-        font       = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness  = 2
-        margin     = 10
-
-        # measure text size so we can right-align
-        (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-        x = frame.shape[1] - text_w - margin            # right-align
-        y = margin + text_h                              # a little below the top edge
-
-        cv2.putText(
-            frame,
-            text,
-            (x, y),
-            font,
-            font_scale,
-            (0, 255, 0),
-            thickness,
-            lineType=cv2.LINE_AA
-        )
+        # Draw FPS
+        fps_text = f"FPS: {fps:.1f}"
+        text_size = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        x_pos = frame.shape[1] - text_size[0] - 10
+        y_pos = text_size[1] + 10
+        cv2.putText(frame, fps_text, (x_pos, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         out.write(frame)
-        if filtered:
-            all_detections.append(dets)
-
+        all_detections.append(filtered)
         frame_count += 1
-        progress_bar.progress(min(frame_count/total_frames,1.0))
+        
+        # Update progress every 10 frames to reduce overhead
+        if frame_count % 10 == 0:
+            progress = min(frame_count / total_frames, 1.0)
+            progress_bar.progress(progress)
+            status_text.text(f"Processing: {frame_count}/{total_frames} frames ({progress*100:.1f}%)")
 
-    # close any still-open events at end
-    for action in ('punch','kick-knee'):
+    for action in ('punch', 'kick-knee'):
         if in_event[action]:
             dur = frame_count - event_start[action]
             if dur >= min_event_dur[action]:
@@ -442,85 +413,72 @@ def process_video(video_path, model):
     cap.release()
     out.release()
     progress_bar.empty()
-    st.success(f"Done.\nPunch: {counters['punch']}\nKick-Knee: {counters['kick-knee']}")
+    status_text.empty()
+    st.success(f"Processing complete!\nPunches: {counters['punch']}\nKicks: {counters['kick-knee']}")
 
-    return all_detections
+    return all_detections, out_path
 
 # Execute YOLO model on a Video File
 def model_execution():
     st.title("Model Execution")
     
-    # Default Data.YAML; Shouldnt need to be changed without Project Changes.
-    default_yaml_path = os.path.join("dataset", "data.yaml")
-    yaml_file_path = default_yaml_path # Comment This Line Out of You Need To Upload Data.YAML
-    
-    # yaml_file_path = None
-    # if os.path.exists(default_yaml_path):
-    #     yaml_file_path = default_yaml_path
-    # uploaded_yaml_file = st.file_uploader("Select data.yaml file", type=["yaml"])
-    
-    # if uploaded_yaml_file is not None:
-    #     yaml_file_path = os.path.join("dataset", uploaded_yaml_file.name)
-    #     with open(yaml_file_path, "wb") as f:
-    #         f.write(uploaded_yaml_file.getbuffer())
-    #     st.success(f"Uploaded YAML: {uploaded_yaml_file.name}")
-    # if yaml_file_path is None:
-    #     st.warning("Please upload data.yaml first.")
-    #     return
-
+    # Load class names once and stash them in session_state
+    yaml_file_path = os.path.join("dataset", "data.yaml")
     yolo_classes = load_classes_from_yaml(yaml_file_path)
+    st.session_state['yolo_classes'] = yolo_classes
+
+    # Let the user pick a .pt and upload a video
     yolo_models = [f for f in os.listdir('models') if f.endswith('.pt')]
     selected_yolo_model = st.selectbox("Select YOLO Model", yolo_models)
     model_path = os.path.join('models', selected_yolo_model)
-    video_file = st.file_uploader("Upload video", type=['mp4','avi','mov'])
 
+    video_file = st.file_uploader("Upload video", type=['mp4','avi','mov'])
     if video_file:
         video_path = os.path.join("data", video_file.name)
         with open(video_path, "wb") as f:
             f.write(video_file.getbuffer())
+
     if st.button("Run Models") and video_file:
+        # load & move to device
         model = load_yolo_model(model_path)
-        model = model.to(device)
         if model is None:
             st.error("Failed to load YOLO model.")
             return
-        detections = process_video(video_path, model)
+        model.to(device)
+
+        # process_video returns (all_detections, actual_out_path)
+        detections, processed_video_path = process_video(video_path, model)
+
         if not detections:
             st.error("No detections.")
             return
-        detected_class_ids = []
+
+        # Build & save your CSV
         all_dets = []
         for frame_idx, frame in enumerate(detections):
-            frame_detections = []
             for d in frame:
                 if len(d) >= 6:
                     class_id = int(d[5])
                     if 0 <= class_id < len(yolo_classes):
-                        detected_class_ids.append(class_id)
-                        frame_detections.append([frame_idx, *d[:6]])
-            all_dets.append(frame_detections)
-        
-        # Save CSV & State Success
+                        all_dets.append([frame_idx, *d[:6]])
+
         csv_file_path = os.path.join("runs", f"yolo_predictions_{video_file.name}.csv")
-        df_detections = pd.DataFrame([det for frame in all_dets for det in frame], columns=['frame','x1','y1','x2','y2','confidence','class_id'])
-        df_detections.to_csv(csv_file_path, index=False)
+        df = pd.DataFrame(all_dets, columns=['frame','x1','y1','x2','y2','confidence','class_id'])
+        df.to_csv(csv_file_path, index=False)
+        st.success(f"Predictions saved to `{csv_file_path}`")
 
-        st.success(f"Predictions => {csv_file_path}")
+        # sanity check the real output path
+        if not os.path.exists(processed_video_path):
+            st.error(f"Processed video not found:\n  {processed_video_path}")
+            return
 
-        # Derive a proper .mp4 filename
-        input_name    = video_file.name
-        base, _       = os.path.splitext(input_name)
-        output_name   = f"{base}.mp4"
-        out_path      = os.path.join("runs", output_name)
-
-        # Serve it with the correct MIME‐type
-        with open(out_path, "rb") as video_file:
-            video_bytes = video_file.read()
+        # serve the actual file your detector wrote
+        with open(processed_video_path, "rb") as vid_f:
             st.download_button(
                 label="Download Processed Video",
-                data=video_bytes,
-                file_name=os.path.basename(out_path),
-                mime="video/mp4"  # or "video/quicktime" for .mov
+                data=vid_f.read(),
+                file_name=os.path.basename(processed_video_path),
+                mime="video/mp4"
             )
 
 ### Transformer Functions
@@ -798,12 +756,11 @@ def transformer_results_dashboard():
     df_ = pd.read_csv(csv_path)
     run_transformer_statistics(os.path.join("models", sel_t), df_, sel_csv)
 
-def build_segments(hit_set, action,
-                   min_len, gap_tol, total_frames):
+def build_segments(hit_set, action, min_len, gap_tol, total_frames):
     segments   = []
     in_event   = False
     gap_count  = 0
-    start_f    = 0          # placeholder
+    start_f    = 0
 
     for f in range(total_frames):
         is_hit = f in hit_set
@@ -815,13 +772,13 @@ def build_segments(hit_set, action,
                 start_f  = f
         elif in_event:
             gap_count += 1
-            if gap_count >= gap_tol:               # **identical to online**
-                dur = f - start_f                  # same length formula
+            if gap_count >= gap_tol:               
+                dur = f - start_f                
                 if dur >= min_len:
                     segments.append({
                         'action': action,
                         'start':  start_f,
-                        'end':    f - gap_count,   # last *hit* frame
+                        'end':    f - gap_count,
                         'length': dur
                     })
                 in_event  = False
