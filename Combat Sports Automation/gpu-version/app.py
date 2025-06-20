@@ -1,6 +1,7 @@
 # Important Imports
 import os
-import shutil
+import subprocess
+import json
 import sys
 import subprocess
 import socket
@@ -14,7 +15,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import yaml
-import plotly.express as px
 import streamlit as st
 import cv2
 from torch.utils.data import Dataset, DataLoader
@@ -417,6 +417,25 @@ def process_video(video_path, model):
     st.success(f"Processing complete!\nPunches: {counters['punch']}\nKicks: {counters['kick-knee']}")
 
     return all_detections, out_path
+
+def get_video_rotation(path: str) -> int:
+    """
+    Uses ffprobe to read the 'rotate' metadata tag on the video stream.
+    Returns 0, 90, 180, or 270.
+    """
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream_tags=rotate",
+            "-of", "json",
+            path
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+        info = json.loads(proc.stdout)
+        return int(info["streams"][0]["tags"].get("rotate", 0))
+    except Exception:
+        return 0
 
 # Execute YOLO model on a Video File
 def model_execution():
