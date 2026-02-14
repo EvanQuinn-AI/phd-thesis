@@ -1,0 +1,18 @@
+# Create and activate environment
+conda create -n automation python=3.8
+conda activate automation
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Install PyTorch (CPU-only)
+pip install torch torchvision torchaudio
+
+# Install other packages
+pip install streamlit transformers opencv-python scikit-learn pandas matplotlib ipywidgets ultralytics
+
+# (Optional) Install Jupyter Notebook support
+pip install notebook ipykernel
+python -m ipykernel install --user --name=automation
+
+Download Git: https://git-scm.com/downloads
