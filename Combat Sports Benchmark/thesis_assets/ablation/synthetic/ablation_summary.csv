@@ -1,0 +1,7 @@
+config_name,enable_yolo,enable_hit_detection,enable_temporal,enable_overlay,n_frames,yolo_mean,yolo_sd,yolo_p95,hit_det_mean,hit_det_sd,hit_det_p95,temporal_mean,temporal_sd,temporal_p95,overlay_mean,overlay_sd,overlay_p95,total_mean,total_sd,total_p95,fps_mean
+Full Pipeline,True,True,True,True,200,9.966,1.838,14.101,0.001,0.0,0.001,0.001,0.0,0.002,0.12,0.024,0.156,10.089,1.851,14.25,99.1
+No YOLO,False,True,True,True,200,0.001,0.0,0.001,0.001,0.0,0.001,0.001,0.0,0.002,0.154,0.103,0.27,0.156,0.103,0.273,6408.8
+No Hit Detection,True,False,True,True,200,12.043,2.827,17.419,0.0,0.0,0.0,0.001,0.0,0.002,0.146,0.046,0.207,12.191,2.851,17.624,82.0
+No Temporal,True,True,False,True,200,9.701,2.112,14.972,0.001,0.0,0.001,0.0,0.0,0.0,0.11,0.021,0.164,9.811,2.126,15.152,101.9
+No Overlay,True,True,True,False,200,8.593,0.439,9.072,0.001,0.0,0.001,0.001,0.0,0.001,0.0,0.0,0.0,8.595,0.439,9.073,116.3
+YOLO Only,True,False,False,False,200,9.144,0.935,11.364,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,9.145,0.935,11.365,109.4

@@ -1,0 +1,17 @@
+names:
+- boxing-bag
+- high-guard
+- kick-knee
+- low-guard
+- person
+- punch
+nc: 6
+roboflow:
+  license: CC BY 4.0
+  project: combat-sports-52pyh
+  url: https://universe.roboflow.com/combatsports-lvdva/combat-sports-52pyh/dataset/2
+  version: 2
+  workspace: combatsports-lvdva
+test: C:/Users/epsq2/Desktop/Combat Sports Automation/dataset/test/images
+train: C:/Users/epsq2/Desktop/Combat Sports Automation/dataset/train/images
+val: C:/Users/epsq2/Desktop/Combat Sports Automation/dataset/valid/images

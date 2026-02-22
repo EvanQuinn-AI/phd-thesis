@@ -1,0 +1,19 @@
+\begin{table}[htbp]
+\centering
+\caption{Ablation study: per-frame latency by pipeline configuration. Measurements taken on NVIDIA GeForce RTX 4060 Laptop GPU (CUDA 11.8) over $N=300$ frames per configuration.}
+\label{tab:ablation}
+\begin{tabular}{lccccrrrrr}
+\toprule
+\multirow{2}{*}{Configuration} & \multicolumn{4}{c}{Components} & \multicolumn{5}{c}{Latency} \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-10}
+& YOLO & Hit Det. & Temporal & Overlay & Mean (ms) & SD (ms) & P\textsubscript{95} (ms) & FPS & $\Delta$ (ms) \\
+\midrule
+\textbf{Full Pipeline} & \checkmark & \checkmark & \checkmark & \checkmark & \textbf{10.6} & \textbf{1.6} & \textbf{14.2} & \textbf{94} & \textbf{—} \\
+No YOLO & $\times$ & \checkmark & \checkmark & \checkmark & 0.1 & 0.0 & 0.1 & 10511 & -10.5 \\
+No Hit Detection & \checkmark & $\times$ & \checkmark & \checkmark & 14.1 & 3.9 & 20.3 & 71 & +3.5 \\
+No Temporal & \checkmark & \checkmark & $\times$ & \checkmark & 11.7 & 2.3 & 16.4 & 85 & +1.1 \\
+No Overlay & \checkmark & \checkmark & \checkmark & $\times$ & 11.7 & 2.3 & 16.5 & 86 & +1.0 \\
+YOLO Only & \checkmark & $\times$ & $\times$ & $\times$ & 16.1 & 5.2 & 25.4 & 62 & +5.4 \\
+\bottomrule
+\end{tabular}
+\end{table}

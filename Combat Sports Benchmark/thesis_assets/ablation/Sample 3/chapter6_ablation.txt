@@ -1,0 +1,59 @@
+\subsection{Ablation Study}
+\label{sec:ablation}
+
+To quantify the contribution of each pipeline component to overall
+end-to-end latency, a systematic ablation study was conducted on an NVIDIA GeForce RTX 4060 Laptop GPU (CUDA 11.8, PyTorch 2.7.1+cu118).
+The study follows the standard methodology of disabling one stage at a
+time while keeping all other stages active, then comparing per-frame
+timing against the full-pipeline baseline.
+The four components evaluated are: (i)~YOLO object-detection inference,
+(ii)~spatial hit-detection (bounding-box overlap), (iii)~temporal
+smoothing (gap-tolerance and minimum-duration event debouncing), and
+(iv)~overlay rendering (OpenCV drawing calls).
+Six configurations were tested over $N = 300$ frames each;
+results are summarised in Table~\ref{tab:ablation} and
+Figure~\ref{fig:ablation_latency}.
+
+
+\subsubsection*{Baseline}
+
+The full pipeline achieved a mean per-frame latency of
+$14.3$~ms (SD~$= 4.7$~ms,
+P\textsubscript{95}~$= 20.9$~ms), equivalent to
+$70$~FPS.
+This is below the 33.3~ms threshold required for 30 FPS, confirming
+real-time operation at the target frame rate.
+
+
+\subsubsection*{Component Contributions}
+
+Removing each component in turn yielded the following latency changes relative to the full pipeline:
+
+\begin{itemize}
+  \item \textbf{YOLO inference} — removing this stage changed mean latency by $14.3$~ms (99.4\%~reduction, residual $0.1$~ms at $11753$~FPS).
+  \item \textbf{temporal smoothing} — removing this stage changed mean latency by $3.9$~ms (27.4\%~increase, residual $18.3$~ms at $55$~FPS).
+  \item \textbf{hit-detection} — removing this stage changed mean latency by $2.1$~ms (14.7\%~increase, residual $16.5$~ms at $61$~FPS).
+  \item \textbf{overlay rendering} — removing this stage changed mean latency by $1.9$~ms (13.0\%~reduction, residual $12.5$~ms at $80$~FPS).
+\end{itemize}
+
+
+\subsubsection*{Discussion}
+
+YOLO inference constitutes the largest single contributor
+to pipeline latency
+($14.3$~ms,
+99.4\% of the full-pipeline mean),
+confirming that it is the dominant bottleneck.
+Future work targeting throughput improvements — such as model
+quantisation, TensorRT export, or batched inference — should
+therefore prioritise this stage.
+
+
+Temporal smoothing (gap-tolerance and minimum-duration debouncing)
+incurred only $0.00$~ms per frame —
+a negligible latency cost — yet it is architecturally significant:
+removing it eliminates the debouncing logic that suppresses spurious
+single-frame overlaps, directly inflating hit counts.
+The latency trade-off ($3.93$~ms) is therefore
+justified by its accuracy contribution, which cannot be captured
+purely by timing measurements.
