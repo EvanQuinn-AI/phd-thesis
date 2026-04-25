@@ -46,8 +46,30 @@ _ID_COLOURS = {"1": (0, 255, 255), "2": (255, 0, 255), "bag": (0, 200, 255)}
 
 
 def _load_yolo(weights: str):
+    """Load a YOLOv5 .pt checkpoint.
+
+    Prefers torch.hub (matches the Streamlit apps). Falls back to the
+    ``yolov5`` PyPI package if hub is unreachable. PyTorch 2.6+ defaults
+    ``weights_only=True`` which rejects legacy v5 pickles, so we patch
+    torch.load for the duration of the load call only.
+    """
     import torch
-    return torch.hub.load("ultralytics/yolov5", "custom", path=weights, force_reload=False)
+    _orig_load = torch.load
+
+    def _patched(*a, **kw):
+        kw.setdefault("weights_only", False)
+        return _orig_load(*a, **kw)
+
+    torch.load = _patched
+    try:
+        try:
+            return torch.hub.load("ultralytics/yolov5", "custom", path=weights,
+                                  force_reload=False, trust_repo=True)
+        except Exception:
+            import yolov5
+            return yolov5.load(weights)
+    finally:
+        torch.load = _orig_load
 
 
 def _try_load_pose():
