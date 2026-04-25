@@ -62,3 +62,21 @@ mismatch.
 
 **Needs review:** confirm that "smoke test overrides defaults" is the
 preferred path vs. lowering the defaults until trained weights arrive.
+
+## D4 — `get_unlabeled` interpretation
+
+**Plan:** `get_unlabeled` is "unlabeled means no non-discarded row in
+labels". Strict reading: discarded clips ARE unlabeled (since their
+only `labels` row has `is_discarded=1`).
+
+**Done:** `get_unlabeled` returns clips with NO row in `labels` at all.
+Practically: a discard is a triage decision and removes the clip from
+the review queue.
+
+**Why:** the strict reading would resurface discarded clips in every
+future review session, defeating the purpose of `discard_clip`. The
+plan's broader intent ("review unknowns and either label or discard
+them") only works under the practical interpretation.
+
+**Needs review:** none — this is a correctness alignment, not a
+deliberate divergence.
