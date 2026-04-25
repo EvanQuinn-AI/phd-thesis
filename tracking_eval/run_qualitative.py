@@ -33,6 +33,7 @@ if str(_THESIS_ROOT) not in sys.path:
 
 from tracking.occlusion import ClinchDetector  # noqa: E402
 from tracking.ownership import ActionOwnership  # noqa: E402
+from tracking.person_filter import PersonFilter  # noqa: E402
 from tracking.pve import PvETracker  # noqa: E402
 from tracking.pvp import PvPTracker  # noqa: E402
 
@@ -184,6 +185,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
 
     tracker = PvPTracker()
     clinch = ClinchDetector()
+    person_filter = PersonFilter()
 
     overlay_path = os.path.join(out_dir, f"{base}_v2_overlay.mp4")
     csv_path = os.path.join(out_dir, f"{base}_v2_log.csv")
@@ -202,7 +204,11 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
         if not ret:
             break
         dets = _yolo_detections(model, frame)
-        person, _bag, actions = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
+        person_raw, _bag, actions = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
+
+        # Pre-filter referees / background. landmarks computed AFTER filtering
+        # to avoid wasting MediaPipe inference on dropped detections.
+        person, _, filter_decisions = person_filter.filter(person_raw)
 
         landmarks_per_person: list = [None] * len(person)
         if pose is not None and person:
@@ -233,6 +239,15 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
             in_clinch = False
 
         _draw_actions(frame, actions, _PVP_CLASS_NAMES)
+        # Draw filtered (dropped) detections in dim grey so the user can
+        # verify what was suppressed.
+        for d in filter_decisions:
+            if d.reason == "kept":
+                continue
+            x1, y1, x2, y2 = d.bbox
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (90, 90, 90), 1)
+            cv2.putText(frame, f"drop: {d.reason}", (x1, max(12, y1 - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 90, 90), 1)
         for tid in ("1", "2"):
             _draw_track(frame, tid, tracker.slots[tid].bbox)
         if state.active:
@@ -285,6 +300,7 @@ def run_pve(video_path: str, weights: str, out_dir: str) -> dict:
 
     model = _load_yolo(weights)
     tracker = PvETracker()
+    person_filter = PersonFilter()
 
     overlay_path = os.path.join(out_dir, f"{base}_v2_overlay.mp4")
     csv_path = os.path.join(out_dir, f"{base}_v2_log.csv")
@@ -302,7 +318,8 @@ def run_pve(video_path: str, weights: str, out_dir: str) -> dict:
         if not ret:
             break
         dets = _yolo_detections(model, frame)
-        person, bag, actions = _split_detections(dets, _PERSON_CLASS_PVE, _BAG_CLASS_PVE)
+        person_raw, bag, actions = _split_detections(dets, _PERSON_CLASS_PVE, _BAG_CLASS_PVE)
+        person, _, _ = person_filter.filter(person_raw)
         state = tracker.update(fi, person, bag)
         bag_state_counts[state["bag_state"]] = bag_state_counts.get(state["bag_state"], 0) + 1
 
