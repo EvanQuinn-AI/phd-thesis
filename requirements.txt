@@ -21,6 +21,8 @@ seaborn>=0.11.0  # Visualization
 transformers>=4.37.0  # Hugging Face Transformers (GPT-2)
 hmmlearn>=0.2.9  # Hidden Markov Models for probability tracking
 filterpy>=1.4.5  # Kalman filters (needed for SORT tracking)
+mediapipe>=0.10  # Pose estimation (used by Combat Sports Benchmark/pose_analytics.py and tracking/features.py)
+pytest>=7  # Test runner for tracking/ package
 
 # Optional for Deployment & Training Logs (Uncomment if needed)
 # tensorboard>=2.4.1  # TensorFlow visualization
