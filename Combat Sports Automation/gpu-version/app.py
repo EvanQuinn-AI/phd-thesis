@@ -19,6 +19,17 @@ import streamlit as st
 import cv2
 from torch.utils.data import Dataset, DataLoader
 
+# Optional v2 tracking — opt-in via USE_TRACKING_V2=1. Defaults to legacy behaviour.
+_THESIS_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _THESIS_ROOT not in sys.path:
+    sys.path.insert(0, _THESIS_ROOT)
+try:
+    from tracking.integration import is_v2_enabled
+    from tracking.pve import PvETracker, ImpactAttributor
+    _TRACKING_V2_IMPORTABLE = True
+except Exception:
+    _TRACKING_V2_IMPORTABLE = False
+
 # Error Handling
 os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
 torch.classes.__path__ = []   # neutralize the broken proxy
@@ -309,6 +320,12 @@ def process_video(video_path, model):
     status_text = st.empty()
     all_detections = []
 
+    _v2_pve = None
+    _v2_impact = None
+    if _TRACKING_V2_IMPORTABLE and is_v2_enabled():
+        _v2_pve = PvETracker()
+        _v2_impact = ImpactAttributor()
+
     def check_overlap(action_boxes, bag_boxes, frame_img):
         for a_box in action_boxes:
             for b_box in bag_boxes:
@@ -361,6 +378,18 @@ def process_video(video_path, model):
 
         ov_punch = check_overlap(punch_boxes, bag_boxes, frame)
         ov_kick = check_overlap(kick_boxes, bag_boxes, frame)
+
+        if _v2_pve is not None:
+            person_boxes_v2 = [tuple(map(int, d[:4])) for d in filtered if int(d[5]) == 4]
+            state = _v2_pve.update(frame_count, person_boxes_v2, list(bag_boxes))
+            _v2_impact.record_bag_state(frame_count, state["bag_state"])
+            if state["person_track"] is not None:
+                px1, py1, px2, py2 = state["person_track"].bbox
+                cv2.putText(frame, f"ID {state['person_track'].track_id}",
+                            (px1, max(0, py1 - 30)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(frame, f"bag: {state['bag_state']}", (50, 170),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
 
         for action, is_over in [('punch', ov_punch), ('kick-knee', ov_kick)]:
             if is_over:

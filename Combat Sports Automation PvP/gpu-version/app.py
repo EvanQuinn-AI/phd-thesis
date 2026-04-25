@@ -21,6 +21,17 @@ from typing import List, Dict
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Dataset, DataLoader
 
+# Optional v2 tracking — opt-in via USE_TRACKING_V2=1. Defaults to legacy behaviour.
+_THESIS_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _THESIS_ROOT not in sys.path:
+    sys.path.insert(0, _THESIS_ROOT)
+try:
+    from tracking.integration import is_v2_enabled, update_two_person_ids_v2
+    from tracking.pvp import PvPTracker
+    _TRACKING_V2_IMPORTABLE = True
+except Exception:
+    _TRACKING_V2_IMPORTABLE = False
+
 #########################
 #      PRE-SETUP
 #########################
@@ -604,6 +615,10 @@ def process_video(video_path, model, csv_out_path="runs/detections.csv"):
     frame_idx = 0
     progress_bar = st.progress(0)
 
+    _v2_tracker = None
+    if _TRACKING_V2_IMPORTABLE and is_v2_enabled():
+        _v2_tracker = PvPTracker()
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -662,7 +677,10 @@ def process_video(video_path, model, csv_out_path="runs/detections.csv"):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
         # Update two-person tracking
-        tracked = update_two_person_ids(frame, person_boxes, tracked)
+        if _v2_tracker is not None:
+            tracked = update_two_person_ids_v2(frame, person_boxes, tracked, _v2_tracker)
+        else:
+            tracked = update_two_person_ids(frame, person_boxes, tracked)
 
         # Draw ID labels
         for pid, pdata in tracked.items():
