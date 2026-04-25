@@ -14,34 +14,41 @@ python tracking_eval/run_qualitative.py \
 | metric | value |
 |---|---|
 | frames processed | 745 |
-| ID 1 visible frames | 712 (95.6%) |
-| ID 2 visible frames | 716 (96.1%) |
+| ID 1 visible frames | 716 (96.1%) |
+| ID 2 visible frames | 712 (95.6%) |
 | clinch events | 9 |
 | anchored | true |
 
+## Overlay legend
+
+- **Yellow box, "ID 1"** — fighter anchored to the left half of the frame.
+- **Magenta box, "ID 2"** — fighter anchored to the right half of the frame.
+- **HAR (action) boxes** — drawn from raw YOLO detections:
+  - magenta = `cross`, orange = `hook`, cyan = `kick`,
+  - light green = `high-guard`, yellow = `low-guard`.
+- **Red top banner "CLINCH (suppress ownership)"** — clinch detector active;
+  Kalman runs predict-only and action ownership is suppressed.
+
 ## Frames
 
-Six representative stills sampled from the 745-frame overlay video
-(`runs/tracking_v2/12_v2_overlay.mp4`, gitignored).
+12 stills sampled from the 745-frame overlay video
+(`runs/tracking_v2/12_v2_overlay.mp4`, gitignored). Naming convention:
+`a*` = open-fight steady-state samples; `b*` = clinch samples.
 
-- **`frames/a_post_anchor_030.png`** — frame 30, just after the 30-frame
-  anchoring window completed. Yellow = ID 1 (left fighter), magenta =
-  ID 2 (right fighter). Anchor's `start_region` rule placed them
-  correctly.
-- **`frames/b_clinch_91-96_093.png`** — first clinch event (frames
-  91–96). "CLINCH (suppress ownership)" banner is up; both boxes
-  overlap during a kick exchange.
-- **`frames/c_steady_200.png`** — steady-state, no clinch. IDs still on
-  the right fighters.
-- **`frames/d_clinch_339-345_341.png`** — clinch event triggered by
-  detection collapse (one bbox where two tracks live).
-- **`frames/e_clinch_518-543_mid_530.png`** — middle of the long 26-frame
-  clinch event. Both ID labels stacked together; tracker held identity
-  through the merge.
-- **`frames/f_late_steady_700.png`** — late steady-state. **ID swap
-  failure**: yellow ID 1 is now on the right fighter, magenta ID 2 on
-  the left. Expected failure mode in the depth-free configuration when
-  fighters look similar after multiple back-to-back clinches.
+| file | frame | what to look for |
+|---|---|---|
+| `frames/a01_post_anchor_030.png`        | 30  | first frame after the 30-frame anchoring window. ID assignment locked. |
+| `frames/a02_steady_early_100.png`       | 100 | both IDs stable on their fighters, action boxes overlaid. |
+| `frames/a03_steady_150.png`             | 150 | continuing steady-state. |
+| `frames/a04_steady_200.png`             | 200 | one fighter near the right edge; ID still attached. |
+| `frames/b01_clinch_91-96_093.png`       | 93  | first clinch event; banner up, boxes overlap. |
+| `frames/b02_clinch_228-230_229.png`     | 229 | brief 3-frame clinch. |
+| `frames/b03_clinch_275-278_277.png`     | 277 | brief 4-frame clinch. |
+| `frames/b04_clinch_339-345_341.png`     | 341 | clinch triggered by detection collapse. |
+| `frames/a05_steady_mid_400.png`         | 400 | post-clinch steady-state. |
+| `frames/b05_clinch_518-543_mid_530.png` | 530 | middle of the long 26-frame clinch. |
+| `frames/b06_clinch_625-629_627.png`     | 627 | late 5-frame clinch. |
+| `frames/a06_late_steady_was_swap_700.png` | 700 | the previously-swapped frame; this run uses the new clinch-aware tracker, so check whether IDs are still on the right fighters. |
 
 ## Clinch runs (frame ranges where the suppression banner was active)
 
@@ -57,9 +64,38 @@ Six representative stills sampled from the 745-frame overlay video
 (659, 659)
 ```
 
-## Notes
+## What changed since the previous push
 
-- First ~30 frames have empty boxes — that's the anchoring window
-  filling, by design.
-- The full overlay MP4 is 15.5 MB and lives under `runs/` (gitignored).
-  Re-generate with the command at the top.
+The previous run showed an ID swap at frame 700. The tracker now wires the
+`ClinchDetector` directly into `PvPTracker.update()`:
+
+1. **Predict-only in clinch.** When the clinch detector is active the
+   Kalman filter is no longer updated from merged or overlapping
+   detections, and the `FeatureBank` is not updated. This stops the
+   filter from drifting onto the wrong fighter.
+2. **Detection-driven clinch exit.** Two clearly-separated detections
+   force-exit the clinch, even when the (stale) predicted-box IoU is
+   still high. Without this, predict-only mode would lock in forever.
+3. **Bank-driven disocclusion recovery.** On the first frame after the
+   clinch ends, slot assignments are re-derived purely from the
+   `FeatureBank` scores (not from the now-drifted Kalman predictions).
+4. **`start_region` sanity check.** When both detections sit in the
+   wrong half of the frame relative to their anchored `start_region`,
+   the swap candidate is scored against the banks and applied if it
+   beats the current assignment.
+
+A regression test (`test_pvp_tracker_survives_clinch_without_id_swap`)
+exercises a synthetic clinch + reverse-order disocclusion and asserts
+that slot 1 ends up tracking its anchored colour, not the other.
+
+## Re-generating
+
+```bash
+python tracking_eval/run_qualitative.py \
+    --video "Combat Sports Automation PvP/data/12.mp4" \
+    --weights "Combat Sports Automation PvP/models/best.pt" \
+    --mode pvp
+```
+
+The full overlay MP4 (~15 MB) lives under `runs/` (gitignored). Frames in
+this directory are extracted with `cv2.VideoCapture` from that file.

@@ -14,6 +14,7 @@ pre-clinch hist, which was contaminated). ``recover_assignment`` does this.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -43,8 +44,14 @@ class ClinchDetector:
         frame_idx: int,
         slot_bboxes: dict,
         num_person_detections: int,
+        person_dets: Optional[list[tuple]] = None,
     ) -> ClinchState:
-        """Update clinch state. ``slot_bboxes`` is ``{tid: bbox or None}``."""
+        """Update clinch state. ``slot_bboxes`` is ``{tid: bbox or None}``.
+
+        If ``person_dets`` is provided, two clearly-separated detections also
+        force-exit the clinch (predicted-box IoU lags during predict-only
+        mode and would otherwise keep the clinch active forever).
+        """
         b1 = slot_bboxes.get("1")
         b2 = slot_bboxes.get("2")
 
@@ -62,14 +69,23 @@ class ClinchDetector:
         else:
             self.state.consecutive_collapse = 0
 
+        # Detection-driven exit: two detections that are clearly apart.
+        det_separated = (
+            person_dets is not None
+            and len(person_dets) >= 2
+            and iou(person_dets[0], person_dets[1]) < self.cfg.contamination_iou_thresh
+        )
+
         should_enter = (
             self.state.consecutive_high_iou >= self.cfg.clinch_min_frames
             or self.state.consecutive_collapse >= self.cfg.clinch_min_frames
         )
-        if should_enter and not self.state.active:
+        should_exit = (not high_iou and not collapsed) or det_separated
+
+        if should_enter and not self.state.active and not det_separated:
             self.state.active = True
             self.state.started_frame = frame_idx
-        elif not high_iou and not collapsed and self.state.active:
+        elif should_exit and self.state.active:
             # Disocclusion: enter uncertain window during which consumers
             # should hold both ID hypotheses alive.
             self.state.active = False

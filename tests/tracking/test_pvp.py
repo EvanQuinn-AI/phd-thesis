@@ -123,3 +123,42 @@ def test_pvp_tracker_no_landmarks_falls_back_gracefully():
         tracker.update(_frame_with_two_colours(), boxes, None)
     out = tracker.as_legacy_tracked_dict()
     assert out["1"]["box"] is not None and out["2"]["box"] is not None
+
+
+def test_pvp_tracker_survives_clinch_without_id_swap():
+    """The two fighters meet in the middle (clinch), then separate to opposite
+    halves. Slot 1 (red, anchored left) must end up on the red detection;
+    slot 2 (blue, anchored right) on the blue detection."""
+    tracker = PvPTracker()
+    landmarks_a = _landmarks(150 / 640)
+    landmarks_b = _landmarks(490 / 640)
+
+    # Phase A: anchor at the starting positions (red left, blue right).
+    boxes_apart = [_make_box(150, 240), _make_box(490, 240)]
+    for _ in range(tracker.cfg.anchor_window_frames):
+        tracker.update(_frame_with_two_colours(), boxes_apart, [landmarks_a, landmarks_b])
+
+    # Phase B: clinch — both bboxes overlap heavily for a while.
+    # Need enough frames for Kalman predictions to converge to the new
+    # positions; only then does the predicted-box IoU exceed the clinch
+    # threshold and the clinch state turn active.
+    overlap_frame = _frame_with_two_colours(shift_a=140, shift_b=-140)
+    boxes_clinched = [_make_box(310, 240), _make_box(320, 240)]
+    for _ in range(tracker.cfg.clinch_min_frames * 4):
+        tracker.update(overlap_frame, boxes_clinched, [_landmarks(310 / 640), _landmarks(320 / 640)])
+    assert tracker.clinch.state.active
+
+    # Phase C: separate — but with detection order REVERSED (blue first).
+    # Without bank-driven recovery the new IoU pass would lock in the swap.
+    for _ in range(10):
+        boxes_sep = [_make_box(490, 240), _make_box(150, 240)]
+        landmarks_sep = [landmarks_b, landmarks_a]
+        tracker.update(_frame_with_two_colours(), boxes_sep, landmarks_sep)
+
+    out = tracker.as_legacy_tracked_dict()
+    # Slot 1 anchored to the red (left-half) appearance — should now be
+    # tracking the red detection at x≈150, NOT the blue at x≈490.
+    assert out["1"]["box"] is not None and out["2"]["box"] is not None
+    cx_1 = (out["1"]["box"][0] + out["1"]["box"][2]) / 2
+    cx_2 = (out["2"]["box"][0] + out["2"]["box"][2]) / 2
+    assert cx_1 < cx_2, f"slot 1 should be left of slot 2 after clinch; got {cx_1=} {cx_2=}"

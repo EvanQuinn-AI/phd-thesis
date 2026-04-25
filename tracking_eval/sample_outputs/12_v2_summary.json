@@ -1,8 +1,8 @@
 {
   "video": "Combat Sports Automation PvP/data/12.mp4",
   "frames": 745,
-  "id1_visible_frames": 712,
-  "id2_visible_frames": 716,
+  "id1_visible_frames": 716,
+  "id2_visible_frames": 712,
   "clinch_events": 9,
   "anchored": true
 }

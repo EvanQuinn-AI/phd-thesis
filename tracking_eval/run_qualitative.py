@@ -115,17 +115,45 @@ def _yolo_detections(model, frame_bgr) -> np.ndarray:
 
 
 def _split_detections(dets: np.ndarray, person_cls: int, bag_cls: int):
-    person, bag = [], []
+    person, bag, actions = [], [], []
     for d in dets:
         x1, y1, x2, y2, conf, cls_id = d
         if conf < 0.3:
             continue
         box = (int(x1), int(y1), int(x2), int(y2))
-        if int(cls_id) == person_cls:
+        cid = int(cls_id)
+        if cid == person_cls:
             person.append(box)
-        elif int(cls_id) == bag_cls:
+        elif cid == bag_cls:
             bag.append(box)
-    return person, bag
+        else:
+            actions.append((cid, box, float(conf)))
+    return person, bag, actions
+
+
+# Class-name maps lifted from the Streamlit apps.
+_PVE_CLASS_NAMES = {
+    0: "boxing-bag", 1: "high-guard", 2: "kick-knee", 3: "low-guard",
+    4: "person", 5: "punch",
+}
+_PVP_CLASS_NAMES = {
+    0: "boxing-bag", 1: "cross", 2: "high-guard", 3: "hook",
+    4: "kick", 5: "low-guard", 6: "person",
+}
+_ACTION_COLOURS = {
+    "cross": (255, 0, 255), "hook": (255, 165, 0), "kick": (0, 255, 255),
+    "punch": (255, 0, 255), "kick-knee": (0, 255, 255),
+    "high-guard": (127, 255, 127), "low-guard": (255, 255, 0),
+}
+
+
+def _draw_actions(frame, actions: list, names_map: dict) -> None:
+    for cid, box, conf in actions:
+        name = names_map.get(cid, str(cid))
+        color = _ACTION_COLOURS.get(name, (200, 200, 200))
+        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+        cv2.putText(frame, f"{name} {conf:.2f}", (box[0], min(frame.shape[0] - 5, box[3] + 16)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
 
 def _draw_track(frame, tid, box, conf=None):
@@ -174,7 +202,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
         if not ret:
             break
         dets = _yolo_detections(model, frame)
-        person, _bag = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
+        person, _bag, actions = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
 
         landmarks_per_person: list = [None] * len(person)
         if pose is not None and person:
@@ -204,6 +232,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
         elif not state.active:
             in_clinch = False
 
+        _draw_actions(frame, actions, _PVP_CLASS_NAMES)
         for tid in ("1", "2"):
             _draw_track(frame, tid, tracker.slots[tid].bbox)
         if state.active:
@@ -273,10 +302,11 @@ def run_pve(video_path: str, weights: str, out_dir: str) -> dict:
         if not ret:
             break
         dets = _yolo_detections(model, frame)
-        person, bag = _split_detections(dets, _PERSON_CLASS_PVE, _BAG_CLASS_PVE)
+        person, bag, actions = _split_detections(dets, _PERSON_CLASS_PVE, _BAG_CLASS_PVE)
         state = tracker.update(fi, person, bag)
         bag_state_counts[state["bag_state"]] = bag_state_counts.get(state["bag_state"], 0) + 1
 
+        _draw_actions(frame, actions, _PVE_CLASS_NAMES)
         if state["person_track"] is not None:
             _draw_track(frame, "1", state["person_track"].bbox)
         if state["bag_track"] is not None:
