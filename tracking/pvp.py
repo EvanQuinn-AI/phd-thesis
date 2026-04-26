@@ -48,6 +48,7 @@ class PvPSlot:
     kalman: Optional[BBoxKalman] = None
     feature_bank: FeatureBank = None
     last_hist: Optional[np.ndarray] = None
+    last_mask: Optional[np.ndarray] = None
     age_since_seen: int = 0
     front_foot: Optional[str] = None
     start_region: Optional[str] = None
@@ -185,6 +186,7 @@ class PvPTracker:
         landmarks: Optional[dict],
         frame: np.ndarray,
         suppress_bank_update: bool,
+        mask: Optional[np.ndarray] = None,
     ) -> None:
         slot = self.slots[tid]
         if slot.kalman is None:
@@ -194,8 +196,9 @@ class PvPTracker:
         slot.bbox = slot.kalman.bbox()
         slot.age_since_seen = 0
         slot.last_hist = _legacy_full_hist(frame, slot.bbox)
+        slot.last_mask = mask
         if not suppress_bank_update:
-            feats = self.extractor.extract(frame, slot.bbox, landmarks)
+            feats = self.extractor.extract(frame, slot.bbox, landmarks, mask=mask)
             conf = self.extractor.mean_landmark_visibility(landmarks) if landmarks else 0.5
             if conf >= self.cfg.pose_conf_for_bank_update or not landmarks:
                 slot.feature_bank.add_features(feats, conf)
@@ -205,14 +208,23 @@ class PvPTracker:
         frame: np.ndarray,
         person_dets: list[tuple],
         landmarks_per_person: Optional[list[Optional[dict]]] = None,
+        masks_per_person: Optional[list] = None,
     ) -> dict:
         """Return a dict shaped like the legacy ``tracked`` dict.
 
         ``landmarks_per_person`` may be ``None`` to signal "no pose data this
         frame," which forces the legacy whole-bbox histogram fallback.
+
+        ``masks_per_person`` (optional) supplies per-detection instance masks.
+        When present, the FeatureBank is built from mask-bounded regions
+        (no background contamination) and the ClinchDetector switches to
+        mask-IoU. Pass ``None`` to keep the bbox-only behaviour exactly as
+        it was before the segmentation upgrade.
         """
         if landmarks_per_person is None:
             landmarks_per_person = [None] * len(person_dets)
+        if masks_per_person is None:
+            masks_per_person = [None] * len(person_dets)
 
         # Auto-anchor if we haven't yet but have enough observations queued.
         if not self.anchored:
@@ -227,12 +239,18 @@ class PvPTracker:
         # Clinch detection runs on PREDICTED boxes (so it triggers even when
         # the detector has merged the two fighters), but also takes the raw
         # detections so it can force-exit when two clearly-separate boxes
-        # reappear.
+        # reappear. With masks, the IoU thresholds become much more meaningful
+        # — bboxes overlap as soon as fighters close, masks only when they
+        # actually touch.
+        slot_masks = {tid: self.slots[tid].last_mask for tid in slot_ids}
+        any_mask = any(m is not None for m in slot_masks.values())
         clinch_state = self.clinch.observe(
             self._frame_idx,
             {tid: predicted[tid] for tid in slot_ids},
             num_person_detections=len(person_dets),
             person_dets=person_dets,
+            slot_masks=slot_masks if any_mask else None,
+            person_masks=masks_per_person if any(m is not None for m in masks_per_person) else None,
         )
         was_clinched_last_frame = self._is_post_clinch_recovery_frame()
         in_clinch = clinch_state.active
@@ -303,6 +321,7 @@ class PvPTracker:
                 landmarks_per_person[det_idx],
                 frame,
                 suppress_bank_update=suppress_bank_update_flag,
+                mask=masks_per_person[det_idx],
             )
 
         # Slots that got no detection: age + Kalman-only.
