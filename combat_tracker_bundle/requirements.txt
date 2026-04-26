@@ -1,0 +1,24 @@
+# Runtime + test dependencies for the bundle.
+# Add these on top of whatever your project already has — duplicates
+# are harmless.
+
+# Core
+numpy>=1.24
+opencv-python>=4.8       # or opencv-python-headless on servers
+filterpy>=1.4.5          # currently unused; kalman.py is pure-numpy. Keep for future-proofing.
+
+# Pose (one of these)
+mediapipe>=0.10,<0.10.10  # legacy mp.solutions.pose API; auto-fallback when YOLO-pose unavailable
+ultralytics>=8.0          # required for YOLOv8/v11/v26 detection / seg / pose
+
+# Recognizer Phase 1
+torch>=2.0
+
+# Recognizer Phase 2 (clip storage)
+lz4>=4.0
+
+# Recognizer Phase 3 (review clustering)
+hdbscan>=0.8
+
+# Test runner
+pytest>=7
