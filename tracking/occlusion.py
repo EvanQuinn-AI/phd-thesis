@@ -21,6 +21,7 @@ import numpy as np
 from tracking.config import DEFAULT, TrackingConfig
 from tracking.features import PartExtractor
 from tracking.kalman import iou
+from tracking.masks import mask_iou
 
 
 @dataclass
@@ -45,17 +46,33 @@ class ClinchDetector:
         slot_bboxes: dict,
         num_person_detections: int,
         person_dets: Optional[list[tuple]] = None,
+        slot_masks: Optional[dict] = None,
+        person_masks: Optional[list] = None,
     ) -> ClinchState:
         """Update clinch state. ``slot_bboxes`` is ``{tid: bbox or None}``.
 
         If ``person_dets`` is provided, two clearly-separated detections also
         force-exit the clinch (predicted-box IoU lags during predict-only
         mode and would otherwise keep the clinch active forever).
+
+        Mask-aware operation: when ``slot_masks`` and/or ``person_masks`` are
+        provided, mask-IoU replaces bbox-IoU for the corresponding signal.
+        Bboxes overlap heavily as soon as fighters close range; masks overlap
+        only when their pixels actually mix, so the clinch threshold is more
+        meaningful with masks.
         """
         b1 = slot_bboxes.get("1")
         b2 = slot_bboxes.get("2")
 
-        high_iou = (b1 is not None and b2 is not None and iou(b1, b2) > self.cfg.clinch_iou_thresh)
+        m1 = slot_masks.get("1") if slot_masks else None
+        m2 = slot_masks.get("2") if slot_masks else None
+        slot_masks_present = m1 is not None and m2 is not None
+
+        if slot_masks_present:
+            high_iou = mask_iou(m1, m2) > self.cfg.clinch_iou_thresh
+        else:
+            high_iou = (b1 is not None and b2 is not None
+                        and iou(b1, b2) > self.cfg.clinch_iou_thresh)
         both_alive = b1 is not None and b2 is not None
         collapsed = both_alive and num_person_detections == 1
 
@@ -70,11 +87,17 @@ class ClinchDetector:
             self.state.consecutive_collapse = 0
 
         # Detection-driven exit: two detections that are clearly apart.
-        det_separated = (
-            person_dets is not None
-            and len(person_dets) >= 2
-            and iou(person_dets[0], person_dets[1]) < self.cfg.contamination_iou_thresh
-        )
+        det_separated = False
+        if person_masks is not None and len(person_masks) >= 2 \
+                and person_masks[0] is not None and person_masks[1] is not None:
+            det_separated = (
+                mask_iou(person_masks[0], person_masks[1])
+                < self.cfg.contamination_iou_thresh
+            )
+        elif person_dets is not None and len(person_dets) >= 2:
+            det_separated = (
+                iou(person_dets[0], person_dets[1]) < self.cfg.contamination_iou_thresh
+            )
 
         should_enter = (
             self.state.consecutive_high_iou >= self.cfg.clinch_min_frames
