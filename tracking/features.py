@@ -64,7 +64,8 @@ class PartExtractor:
         cx, cy = nose_xy
         return (max(x1, cx - r), max(y1, cy - r), min(x2, cx + r), min(y2, cy + r))
 
-    def _hist(self, frame: np.ndarray, region: tuple) -> Optional[np.ndarray]:
+    def _hist(self, frame: np.ndarray, region: tuple,
+              mask: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
         x1, y1, x2, y2 = region
         if x2 <= x1 + 1 or y2 <= y1 + 1:
             return None
@@ -72,8 +73,17 @@ class PartExtractor:
         if patch.size == 0:
             return None
         hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        hist_mask = None
+        if mask is not None:
+            mask_patch = mask[y1:y2, x1:x2]
+            if mask_patch.shape == hsv.shape[:2] and mask_patch.any():
+                hist_mask = (mask_patch.astype(np.uint8) * 255)
+            else:
+                # Region is entirely outside the instance mask -> region not
+                # informative, skip.
+                return None
         hist = cv2.calcHist(
-            [hsv], [0, 1], None,
+            [hsv], [0, 1], hist_mask,
             [self.cfg.hist_h_bins, self.cfg.hist_s_bins],
             [0, 180, 0, 256],
         )
@@ -85,14 +95,22 @@ class PartExtractor:
         frame: np.ndarray,
         bbox: tuple,
         landmarks: Optional[dict] = None,
+        mask: Optional[np.ndarray] = None,
     ) -> dict:
-        """Return ``{region: histogram}`` dict. Missing keypoints → region omitted."""
+        """Return ``{region: histogram}`` dict. Missing keypoints → region omitted.
+
+        ``mask`` is an optional binary instance mask (same shape as ``frame``
+        in HxW). When provided, each region's pixel sample is intersected
+        with the mask, removing background and other-fighter contamination
+        before the HSV histogram is computed. With ``mask=None`` the legacy
+        bbox-only behaviour is preserved exactly.
+        """
         h, w = frame.shape[:2]
         out: dict[str, np.ndarray] = {}
 
         if landmarks is None:
             # Fall back to whole-bbox histogram only.
-            hist = self._hist(frame, tuple(bbox))
+            hist = self._hist(frame, tuple(bbox), mask=mask)
             if hist is not None:
                 out["torso"] = hist
             return out
@@ -106,29 +124,29 @@ class PartExtractor:
 
         if "left_wrist" in pts:
             box = self._glove_box(pts["left_wrist"], bbox)
-            hist = self._hist(frame, box)
+            hist = self._hist(frame, box, mask=mask)
             if hist is not None:
                 out["gloves_L"] = hist
         if "right_wrist" in pts:
             box = self._glove_box(pts["right_wrist"], bbox)
-            hist = self._hist(frame, box)
+            hist = self._hist(frame, box, mask=mask)
             if hist is not None:
                 out["gloves_R"] = hist
         hips = [pts[n] for n in ("left_hip", "right_hip") if n in pts]
         if len(hips) >= 1:
             box = self._trunks_box(hips, bbox)
-            hist = self._hist(frame, box)
+            hist = self._hist(frame, box, mask=mask)
             if hist is not None:
                 out["trunks"] = hist
         torso_pts = [pts[n] for n in ("left_shoulder", "right_shoulder", "left_hip", "right_hip") if n in pts]
         if len(torso_pts) >= 3:
             box = self._torso_box(torso_pts, bbox)
-            hist = self._hist(frame, box)
+            hist = self._hist(frame, box, mask=mask)
             if hist is not None:
                 out["torso"] = hist
         if "nose" in pts:
             box = self._head_box(pts["nose"], bbox)
-            hist = self._hist(frame, box)
+            hist = self._hist(frame, box, mask=mask)
             if hist is not None:
                 out["head"] = hist
         return out
