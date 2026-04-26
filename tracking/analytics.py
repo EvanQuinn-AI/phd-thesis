@@ -149,6 +149,9 @@ class FighterAnalytics:
             self._slots[owner_id].landed_by_class[action_class] += 1
         if target_id in self._slots and target_id != owner_id:
             self._slots[target_id].received_by_class[action_class] += 1
+        # target_id == "bag" is valid in single-fighter bag-work scenes;
+        # we don't track shots received by the bag (it's a target, not a
+        # fighter), but the owner's landed count still increments above.
 
     # ---- Reporting ----------------------------------------------------
 

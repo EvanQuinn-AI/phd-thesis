@@ -57,8 +57,15 @@ def bbox_to_mask(bbox: tuple, frame_shape: tuple) -> np.ndarray:
 
 
 def grabcut_mask(frame_bgr: np.ndarray, bbox: tuple,
-                 num_iters: int = 3) -> Optional[np.ndarray]:
+                 num_iters: int = 3,
+                 exclude_boxes: Optional[list[tuple]] = None) -> Optional[np.ndarray]:
     """Foreground mask for a single bbox via GrabCut.
+
+    The output is constrained to the bbox interior (zeroed elsewhere) so
+    grabcut never wraps adjacent objects. Optional ``exclude_boxes``
+    (e.g. the bag) are forced to definite-background before iteration so
+    they don't get pulled into the foreground when the fighter and bag
+    overlap.
 
     Slow (~50-200 ms per call). Used only in the qualitative eval as a
     stand-in for true instance segmentation, so the mask path can be
@@ -72,15 +79,31 @@ def grabcut_mask(frame_bgr: np.ndarray, bbox: tuple,
         return None
 
     mask = np.zeros((h, w), dtype=np.uint8)
+    if exclude_boxes:
+        for (ex1, ey1, ex2, ey2) in exclude_boxes:
+            ex1 = max(0, ex1); ey1 = max(0, ey1)
+            ex2 = min(w, ex2); ey2 = min(h, ey2)
+            if ex2 > ex1 and ey2 > ey1:
+                mask[ey1:ey2, ex1:ex2] = cv2.GC_BGD
     bgd = np.zeros((1, 65), np.float64)
     fgd = np.zeros((1, 65), np.float64)
     rect = (x1, y1, x2 - x1, y2 - y1)
     try:
-        cv2.grabCut(frame_bgr, mask, rect, bgd, fgd, num_iters, cv2.GC_INIT_WITH_RECT)
+        init_mode = cv2.GC_INIT_WITH_MASK if exclude_boxes else cv2.GC_INIT_WITH_RECT
+        if init_mode == cv2.GC_INIT_WITH_MASK:
+            # Mark inside-the-rect pixels as probable foreground first.
+            mask[y1:y2, x1:x2] = np.where(
+                mask[y1:y2, x1:x2] == cv2.GC_BGD,
+                cv2.GC_BGD, cv2.GC_PR_FGD,
+            )
+        cv2.grabCut(frame_bgr, mask, rect, bgd, fgd, num_iters, init_mode)
     except cv2.error:
         return None
     out = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 1, 0).astype(np.uint8)
-    return out
+    # Constrain to the input bbox so the mask never bleeds outside.
+    constrained = np.zeros_like(out)
+    constrained[y1:y2, x1:x2] = out[y1:y2, x1:x2]
+    return constrained
 
 
 def extract_yolo_seg_masks(results, frame_shape: tuple) -> Optional[list[np.ndarray]]:

@@ -1,7 +1,7 @@
 {
   "video": "Combat Sports Automation Tool/data/1.mp4",
   "frames": 238,
-  "id1_visible_frames": 0,
+  "id1_visible_frames": 209,
   "id2_visible_frames": 0,
   "clinch_events": 0,
   "anchored": true,
@@ -13,21 +13,24 @@
     "duration_seconds": 7.933333333333334,
     "fighters": {
       "1": {
-        "throws_total": 0,
-        "throws_by_class": {},
+        "throws_total": 94,
+        "throws_by_class": {
+          "cross": 93,
+          "hook": 1
+        },
         "landed_total": 0,
         "landed_by_class": {},
         "hit_rate": 0.0,
-        "throws_per_minute": 0.0,
+        "throws_per_minute": 710.9243697478992,
         "shots_received_total": 0,
         "shots_received_by_class": {},
         "guards_active_frames": 138,
         "time_in_clinch_frames": 0,
         "time_in_clinch_seconds": 0.0,
-        "travel_distance_px": 0.0,
-        "mean_centroid_speed_pps": 0.0,
-        "peak_centroid_speed_pps": 0.0,
-        "mean_wrist_speed_pps": 0.0
+        "travel_distance_px": 3746.9280957251794,
+        "mean_centroid_speed_pps": 540.4223214988244,
+        "peak_centroid_speed_pps": 24455.635853520555,
+        "mean_wrist_speed_pps": 1844.827630641026
       },
       "2": {
         "throws_total": 0,

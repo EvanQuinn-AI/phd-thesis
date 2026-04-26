@@ -75,6 +75,112 @@ def _load_yolo(weights: str):
         torch.load = _orig_load
 
 
+def _try_load_yolo_pose(weights: str = "models/yolov8n-pose.pt"):
+    """Optional Ultralytics YOLOv8/v11/v26 pose model. Returns None if
+    not available. Provides per-instance COCO-17 keypoints."""
+    try:
+        import torch
+        _orig = torch.load
+        def _patched(*a, **kw):
+            kw.setdefault("weights_only", False)
+            return _orig(*a, **kw)
+        torch.load = _patched
+        try:
+            from ultralytics import YOLO
+            return YOLO(weights)
+        finally:
+            torch.load = _orig
+    except Exception:
+        return None
+
+
+# COCO-17 → MediaPipe-13 mapping (we standardise on the 13-name interface).
+_COCO_TO_MP13 = {
+    "nose": 0,
+    "left_shoulder": 5, "right_shoulder": 6,
+    "left_elbow": 7, "right_elbow": 8,
+    "left_wrist": 9, "right_wrist": 10,
+    "left_hip": 11, "right_hip": 12,
+    "left_knee": 13, "right_knee": 14,
+    "left_ankle": 15, "right_ankle": 16,
+}
+
+
+def _yolo_pose_per_person(yolo_pose, frame_bgr, person_dets, frame_w, frame_h):
+    """Returns one MediaPipe-style landmark dict per ``person_dets`` index.
+
+    Per-instance from a YOLO pose model. Each detection's keypoints get
+    associated with the input bbox by IoU between the pose-model's
+    person bbox and our person_dets entries.
+    """
+    out: list = [None] * len(person_dets)
+    if yolo_pose is None or not person_dets:
+        return out
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    res = yolo_pose.predict(rgb, verbose=False, conf=0.25)
+    if not res:
+        return out
+    r0 = res[0]
+    if r0.boxes is None or r0.keypoints is None:
+        return out
+    boxes = r0.boxes.xyxy.cpu().numpy()
+    kps = r0.keypoints.data.cpu().numpy()  # (N, 17, 3): x_pix, y_pix, conf
+    if boxes.shape[0] == 0:
+        return out
+
+    # Greedy IoU match each input bbox to a pose detection.
+    for i, pb in enumerate(person_dets):
+        best_iou, best_idx = 0.0, -1
+        for j, qb in enumerate(boxes):
+            ax1, ay1, ax2, ay2 = pb
+            bx1, by1, bx2, by2 = qb
+            ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+            ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+            iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
+            inter = iw * ih
+            if inter == 0:
+                continue
+            au = (ax2 - ax1) * (ay2 - ay1)
+            bu = (bx2 - bx1) * (by2 - by1)
+            v = inter / (au + bu - inter + 1e-6)
+            if v > best_iou:
+                best_iou, best_idx = v, j
+        if best_iou < 0.2 or best_idx < 0:
+            continue
+        kp = kps[best_idx]  # (17, 3)
+        lm = {}
+        for name, idx in _COCO_TO_MP13.items():
+            x_pix, y_pix, c = kp[idx]
+            lm[name] = (float(x_pix) / frame_w, float(y_pix) / frame_h, float(c))
+        out[i] = lm
+    return out
+
+
+_SKELETON_PAIRS = [
+    ("left_shoulder", "right_shoulder"),
+    ("left_shoulder", "left_elbow"), ("left_elbow", "left_wrist"),
+    ("right_shoulder", "right_elbow"), ("right_elbow", "right_wrist"),
+    ("left_shoulder", "left_hip"), ("right_shoulder", "right_hip"),
+    ("left_hip", "right_hip"),
+    ("left_hip", "left_knee"), ("left_knee", "left_ankle"),
+    ("right_hip", "right_knee"), ("right_knee", "right_ankle"),
+]
+
+
+def _draw_skeleton(frame, landmarks, frame_w, frame_h, color=(0, 255, 0)):
+    if not landmarks:
+        return
+    pts = {}
+    for name, lm in landmarks.items():
+        if lm[2] >= 0.3:
+            pts[name] = (int(lm[0] * frame_w), int(lm[1] * frame_h))
+    for a, b in _SKELETON_PAIRS:
+        if a in pts and b in pts:
+            cv2.line(frame, pts[a], pts[b], color, 2)
+    for p in pts.values():
+        cv2.circle(frame, p, 3, color, -1)
+
+
 def _try_load_pose():
     """Optional MediaPipe pose. Returns None if unavailable."""
     try:
@@ -223,17 +329,13 @@ def _draw_metrics_panel(frame, summary):
 
 
 def _per_person_masks(model_results, frame, person_dets, frame_shape,
-                      mask_mode: str) -> Optional[list]:
+                      mask_mode: str,
+                      bag_dets: Optional[list] = None) -> Optional[list]:
     """Build per-detection masks. Returns None when ``mask_mode='none'`` or
     no mask source is available. Order matches ``person_dets``.
 
-    ``mask_mode`` values:
-        - "none": no masks (back-compat).
-        - "yolo_seg": pull from a YOLOv26-seg results object. Returns None
-          if the model is detection-only.
-        - "grabcut": synthesise per-bbox masks via OpenCV GrabCut. Slow
-          (~50-200 ms/frame total) but useful as a stand-in until a
-          segmentation model is trained.
+    ``bag_dets`` (optional) are masked out as definite-background so
+    GrabCut doesn't accidentally include the bag in the fighter's mask.
     """
     if mask_mode == "none":
         return None
@@ -242,7 +344,11 @@ def _per_person_masks(model_results, frame, person_dets, frame_shape,
     if mask_mode == "grabcut":
         out = []
         for box in person_dets:
-            m = grabcut_mask(frame, box, num_iters=2)
+            # Exclude the bag, plus any OTHER person bbox so grabcut on
+            # fighter A doesn't reach into fighter B's pixels.
+            other = [b for b in person_dets if b is not box]
+            exclude = list(bag_dets or []) + other
+            m = grabcut_mask(frame, box, num_iters=2, exclude_boxes=exclude)
             out.append(m)
         return out
     raise ValueError(f"unknown mask_mode: {mask_mode}")
@@ -267,6 +373,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
     tracker = PvPTracker()
     clinch = ClinchDetector()
     person_filter = PersonFilter()
+    yolo_pose = _try_load_yolo_pose()
 
     overlay_path = os.path.join(out_dir, f"{base}_v2_overlay.mp4")
     csv_path = os.path.join(out_dir, f"{base}_v2_log.csv")
@@ -291,22 +398,26 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
         if not ret:
             break
         dets = _yolo_detections(model, frame)
-        person_raw, _bag, actions = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
+        person_raw, bag_dets, actions = _split_detections(dets, _PERSON_CLASS_PVP, _BAG_CLASS_PVP)
+        bag_box = bag_dets[0] if bag_dets else None
 
-        # Pre-filter referees / background. landmarks computed AFTER filtering
-        # to avoid wasting MediaPipe inference on dropped detections.
         person, _, filter_decisions = person_filter.filter(person_raw)
 
-        # Per-person masks (optional).
+        # Per-person masks (optional). Bag + other-person bboxes excluded.
         masks_per_person = _per_person_masks(
             None, frame, person, frame.shape[:2], mask_mode,
+            bag_dets=bag_dets,
         )
         if masks_per_person and any(m is not None for m in masks_per_person):
             mask_frames += 1
 
+        # Pose: prefer per-instance YOLO-pose, fall back to MediaPipe.
         landmarks_per_person: list = [None] * len(person)
-        if pose is not None and person:
-            # Run pose on largest person bbox crop. Cheap heuristic; good enough for eval.
+        if yolo_pose is not None and person:
+            landmarks_per_person = _yolo_pose_per_person(
+                yolo_pose, frame, person, w, h,
+            )
+        elif pose is not None and person:
             for i, box in enumerate(person):
                 x1, y1, x2, y2 = box
                 crop = frame[max(0, y1):y2, max(0, x1):x2]
@@ -315,7 +426,6 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
                 lm = _extract_landmarks(pose, crop)
                 if lm is None:
                     continue
-                # Re-normalise crop landmarks to full-frame coords.
                 cw, ch = (x2 - x1), (y2 - y1)
                 landmarks_per_person[i] = {
                     name: ((x1 + lm[name][0] * cw) / w,
@@ -349,7 +459,8 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
             if best_iou >= 0.3 and 0 <= best_idx < len(landmarks_per_person):
                 slot_landmarks[tid] = landmarks_per_person[best_idx]
 
-        # Per-action ownership + analytics.
+        # Per-action ownership + analytics. Bag passed in so single-fighter
+        # bag-work clips also produce stats (target = bag).
         action_classes_present = []
         for cid, abox, _conf in actions:
             cname = _PVP_CLASS_NAMES.get(cid, str(cid))
@@ -361,6 +472,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
                 frame_idx=fi, frame_size=(w, h),
                 tracks={tid: {"box": tracker.slots[tid].bbox} for tid in ("1", "2")},
                 landmarks_per_track=slot_landmarks,
+                bag_box=bag_box,
             )
             next_action_id += 1
             if attribution.owner_id is not None:
@@ -378,7 +490,8 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
             action_classes_present=action_classes_present,
         )
 
-        # ---- Draw layer order: masks first (under bboxes), then bboxes/HUD.
+        # ---- Draw layers, back to front:
+        # 1. mask tints/outlines (underlay)
         if masks_per_person:
             for box, m in zip(person, masks_per_person):
                 if m is None:
@@ -386,7 +499,14 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
                 _draw_mask_translucent(frame, m, (60, 200, 255), alpha=0.20)
                 _draw_mask_outline(frame, m, (0, 220, 255))
 
-        _draw_actions(frame, actions, _PVP_CLASS_NAMES)
+        # 2. bag bbox if any
+        if bag_box is not None:
+            cv2.rectangle(frame, (bag_box[0], bag_box[1]),
+                          (bag_box[2], bag_box[3]), (0, 220, 0), 2)
+            cv2.putText(frame, "bag", (bag_box[0], max(14, bag_box[1] - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 1)
+
+        # 3. dropped (filtered) detections in dim grey
         for d in filter_decisions:
             if d.reason == "kept":
                 continue
@@ -394,8 +514,22 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
             cv2.rectangle(frame, (x1, y1), (x2, y2), (90, 90, 90), 1)
             cv2.putText(frame, f"drop: {d.reason}", (x1, max(12, y1 - 4)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 90, 90), 1)
+
+        # 4. tracked-fighter bboxes
         for tid in ("1", "2"):
             _draw_track(frame, tid, tracker.slots[tid].bbox, clinch=state.active)
+
+        # 5. pose skeletons (per slot)
+        for tid in ("1", "2"):
+            lm = slot_landmarks.get(tid)
+            color = _ID_COLOURS.get(tid, (0, 255, 0))
+            if lm:
+                _draw_skeleton(frame, lm, w, h, color=color)
+
+        # 6. YOLO action class boxes ON TOP — these were getting buried before.
+        _draw_actions(frame, actions, _PVP_CLASS_NAMES)
+
+        # 7. HUD
         _draw_metrics_panel(frame, analytics.summary())
         writer.write(frame)
 

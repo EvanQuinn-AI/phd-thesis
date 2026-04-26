@@ -92,7 +92,13 @@ class IdentityAnchor:
         return "left" if lf[0] < rf[0] else "right"
 
     def finalize(self) -> dict[str, AnchoredFighter]:
-        """Aggregate observations into two anchored fighters keyed by ``"1"`` and ``"2"``."""
+        """Aggregate observations into anchored fighters keyed by ``"1"`` and ``"2"``.
+
+        - Frames with two persons populate both slots (left → "1", right → "2").
+        - Frames with one person populate slot 1 only (single-fighter mode).
+          Slot 2 is omitted from the result so the tracker treats it as
+          unused, which is the correct semantics for bag-work / shadow-boxing.
+        """
         if not self._frames:
             return {}
 
@@ -107,9 +113,19 @@ class IdentityAnchor:
 
         for record in self._frames:
             pairs = record["pairs"]
-            if len(pairs) < 2:
+            if not pairs:
                 continue
             ordered = sorted(pairs, key=lambda p: (p[0][0] + p[0][2]) / 2)
+            if len(ordered) < 2:
+                # Single-fighter frame: route to slot A.
+                box_l, lm_l = ordered[0]
+                boxes_a.append(box_l)
+                landmarks_a.append(lm_l)
+                f_l = self.extractor.extract(record["frame"], box_l, lm_l)
+                conf_l = self.extractor.mean_landmark_visibility(lm_l) if lm_l else 0.5
+                if conf_l >= self.cfg.pose_conf_for_bank_update or not lm_l:
+                    bank_a.add_features(f_l, conf_l)
+                continue
             (box_l, lm_l), (box_r, lm_r) = ordered[0], ordered[1]
             boxes_a.append(box_l)
             boxes_b.append(box_r)
@@ -124,11 +140,13 @@ class IdentityAnchor:
             if conf_r >= self.cfg.pose_conf_for_bank_update or not lm_r:
                 bank_b.add_features(f_r, conf_r)
 
-        if not boxes_a or not boxes_b:
+        if not boxes_a:
             return {}
+        single_fighter = not boxes_b
 
         height_a = float(np.mean([b[3] - b[1] for b in boxes_a]))
-        height_b = float(np.mean([b[3] - b[1] for b in boxes_b]))
+        height_b = (float(np.mean([b[3] - b[1] for b in boxes_b]))
+                    if boxes_b else 0.0)
         # Vote front-foot from frames with valid landmarks.
         votes_a: list[str] = []
         votes_b: list[str] = []
@@ -151,6 +169,8 @@ class IdentityAnchor:
             feature_bank=bank_a,
             bbox_history=boxes_a[-5:],
         )
+        if single_fighter:
+            return {"1": fighter_1}
         fighter_2 = AnchoredFighter(
             track_id="2",
             start_region="right_half",

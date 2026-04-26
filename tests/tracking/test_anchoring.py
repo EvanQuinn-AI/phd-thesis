@@ -42,12 +42,13 @@ def test_anchor_handles_single_person_frames(two_rect_frame, two_rect_bboxes, fa
     assert set(fighters) == {"1", "2"}
 
 
-def test_anchor_returns_empty_when_never_two_people(two_rect_frame, two_rect_bboxes, fake_landmarks_two_people):
+def test_anchor_single_fighter_populates_slot_1_only(two_rect_frame, two_rect_bboxes, fake_landmarks_two_people):
     anchor = IdentityAnchor()
     for _ in range(anchor.window):
         anchor.observe(two_rect_frame, [two_rect_bboxes[0]], [fake_landmarks_two_people[0]])
     fighters = anchor.finalize()
-    assert fighters == {}
+    assert set(fighters) == {"1"}, "single-fighter scenes should populate slot 1 only"
+    assert fighters["1"].start_region == "left_half"
 
 
 def test_anchor_window_is_finite(two_rect_frame, two_rect_bboxes, fake_landmarks_two_people):
