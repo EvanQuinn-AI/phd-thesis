@@ -31,7 +31,8 @@ _THESIS_ROOT = _HERE.parent
 if str(_THESIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_THESIS_ROOT))
 
-from tracking.masks import extract_yolo_seg_masks, grabcut_mask  # noqa: E402
+from tracking.analytics import FighterAnalytics  # noqa: E402
+from tracking.masks import extract_yolo_seg_masks, grabcut_mask, mask_overlap_fraction  # noqa: E402
 from tracking.occlusion import ClinchDetector  # noqa: E402
 from tracking.ownership import ActionOwnership  # noqa: E402
 from tracking.person_filter import PersonFilter  # noqa: E402
@@ -158,7 +159,7 @@ def _draw_actions(frame, actions: list, names_map: dict) -> None:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
 
-def _draw_track(frame, tid, box, conf=None):
+def _draw_track(frame, tid, box, conf=None, clinch=False):
     if box is None:
         return
     color = _ID_COLOURS.get(tid, (255, 255, 255))
@@ -166,8 +167,59 @@ def _draw_track(frame, tid, box, conf=None):
     label = f"ID {tid}"
     if conf is not None:
         label += f" {conf:.2f}"
-    cv2.putText(frame, label, (box[0], max(0, box[1] - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    if clinch:
+        label += " [CLINCH]"
+    cv2.putText(frame, label, (box[0], max(14, box[1] - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (0, 0, 255) if clinch else color, 2)
+
+
+def _draw_mask_outline(frame, mask, color):
+    """Draw the mask edge so the user can see the segmentation."""
+    if mask is None:
+        return
+    contours, _ = cv2.findContours((mask.astype(np.uint8) > 0).astype(np.uint8),
+                                   cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return
+    cv2.drawContours(frame, contours, -1, color, 2)
+
+
+def _draw_mask_translucent(frame, mask, color, alpha=0.25):
+    """Tint the mask region for a visible mask vs bbox difference."""
+    if mask is None:
+        return
+    overlay = frame.copy()
+    overlay[mask.astype(bool)] = color
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, dst=frame)
+
+
+def _draw_metrics_panel(frame, summary):
+    """Bottom-left HUD: throws, hit rate, clinch time per fighter."""
+    h, w = frame.shape[:2]
+    pad = 8
+    line_h = 18
+    lines = []
+    for tid in ("1", "2"):
+        f = summary["fighters"][tid]
+        lines.append(
+            f"ID {tid}  thr {f['throws_total']:>3d}  land {f['landed_total']:>2d} "
+            f"hit% {f['hit_rate']*100:>4.0f}  clinch {f['time_in_clinch_seconds']:>4.1f}s "
+            f"trav {f['travel_distance_px']:>5.0f}px"
+        )
+    lines.append(
+        f"engage avg {summary['engagement']['mean_distance_between_fighters_px']:>4.0f}px  "
+        f"in-range {summary['engagement']['frames_within_strike_range']:>3d}f"
+    )
+    box_h = line_h * len(lines) + pad * 2
+    box_w = 480
+    x0, y0 = pad, h - box_h - pad
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, dst=frame)
+    for i, line in enumerate(lines):
+        cv2.putText(frame, line, (x0 + pad, y0 + pad + line_h * (i + 1) - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
 
 def _per_person_masks(model_results, frame, person_dets, frame_shape,
@@ -228,6 +280,9 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
     in_clinch = False
     fi = 0
     mask_frames = 0  # number of frames where any per-person mask was used
+    analytics = FighterAnalytics(fps=fps, frame_size=(w, h))
+    ownership = ActionOwnership(clinch_detector=clinch)
+    next_action_id = 0
 
     while True:
         if max_frames is not None and fi >= max_frames:
@@ -271,6 +326,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
         tracker.update(frame, person, landmarks_per_person,
                        masks_per_person=masks_per_person)
         slot_boxes = {tid: tracker.slots[tid].bbox for tid in ("1", "2")}
+        slot_masks = {tid: tracker.slots[tid].last_mask for tid in ("1", "2")}
         state = clinch.observe(fi, slot_boxes, num_person_detections=len(person))
         if state.active and not in_clinch:
             clinch_events += 1
@@ -278,9 +334,59 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
         elif not state.active:
             in_clinch = False
 
+        # Map detection-index landmarks to slot ids (which detection went to which slot).
+        slot_landmarks: dict[str, Optional[dict]] = {"1": None, "2": None}
+        for tid in ("1", "2"):
+            sb = tracker.slots[tid].bbox
+            if sb is None or not person:
+                continue
+            best_iou, best_idx = -1.0, -1
+            for i, pb in enumerate(person):
+                from tracking.kalman import iou as _iou
+                v = _iou(sb, pb)
+                if v > best_iou:
+                    best_iou, best_idx = v, i
+            if best_iou >= 0.3 and 0 <= best_idx < len(landmarks_per_person):
+                slot_landmarks[tid] = landmarks_per_person[best_idx]
+
+        # Per-action ownership + analytics.
+        action_classes_present = []
+        for cid, abox, _conf in actions:
+            cname = _PVP_CLASS_NAMES.get(cid, str(cid))
+            action_classes_present.append(cname)
+            if cname in ("high-guard", "low-guard"):
+                continue  # guards are stance, not strikes
+            attribution = ownership.assign(
+                action_id=next_action_id, action_class=cname, action_box=abox,
+                frame_idx=fi, frame_size=(w, h),
+                tracks={tid: {"box": tracker.slots[tid].bbox} for tid in ("1", "2")},
+                landmarks_per_track=slot_landmarks,
+            )
+            next_action_id += 1
+            if attribution.owner_id is not None:
+                analytics.record_action_thrown(attribution.owner_id, cname)
+                if attribution.landed and attribution.target_id \
+                        and attribution.target_id != attribution.owner_id:
+                    analytics.record_action_landed(
+                        attribution.owner_id, attribution.target_id, cname,
+                    )
+
+        analytics.observe_frame(
+            slot_bboxes=slot_boxes,
+            slot_landmarks=slot_landmarks,
+            clinch_active=state.active,
+            action_classes_present=action_classes_present,
+        )
+
+        # ---- Draw layer order: masks first (under bboxes), then bboxes/HUD.
+        if masks_per_person:
+            for box, m in zip(person, masks_per_person):
+                if m is None:
+                    continue
+                _draw_mask_translucent(frame, m, (60, 200, 255), alpha=0.20)
+                _draw_mask_outline(frame, m, (0, 220, 255))
+
         _draw_actions(frame, actions, _PVP_CLASS_NAMES)
-        # Draw filtered (dropped) detections in dim grey so the user can
-        # verify what was suppressed.
         for d in filter_decisions:
             if d.reason == "kept":
                 continue
@@ -289,10 +395,8 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
             cv2.putText(frame, f"drop: {d.reason}", (x1, max(12, y1 - 4)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 90, 90), 1)
         for tid in ("1", "2"):
-            _draw_track(frame, tid, tracker.slots[tid].bbox)
-        if state.active:
-            cv2.putText(frame, "CLINCH (suppress ownership)", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            _draw_track(frame, tid, tracker.slots[tid].bbox, clinch=state.active)
+        _draw_metrics_panel(frame, analytics.summary())
         writer.write(frame)
 
         log_rows.append({
@@ -314,6 +418,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
             writer_csv.writerow([row["frame"], row["num_person_dets"],
                                  row["id1_box"], row["id2_box"], row["clinch"]])
 
+    analytics_summary = analytics.summary()
     summary = {
         "video": video_path,
         "frames": fi,
@@ -323,6 +428,7 @@ def run_pvp(video_path: str, weights: str, out_dir: str,
         "anchored": tracker.anchored,
         "mask_mode": mask_mode,
         "frames_with_masks": mask_frames,
+        "analytics": analytics_summary,
     }
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)

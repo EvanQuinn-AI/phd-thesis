@@ -40,6 +40,8 @@ class AttributedAction:
     confidence: float
     reason: str
     method: str  # "mask_iou" | "kinematic" | "centroid_fallback" | "unattributed"
+    landed: bool = False  # action geometry actually contacts the target
+    contact_score: float = 0.0  # mask-overlap fraction or bbox-IoU
 
 
 def _action_centre(action_box: tuple) -> tuple[int, int]:
@@ -238,8 +240,31 @@ class ActionOwnership:
             if candidates and candidates[0][0] > 0:
                 target_id = candidates[0][1]
 
+        # Landed predicate. The action geometry must actually contact the
+        # target — proximity alone is not contact. With masks: action-mask
+        # ∩ target-mask must exceed a small threshold. Without masks:
+        # action_box must IoU the target_box above a threshold.
+        landed = False
+        contact_score = 0.0
+        if target_id is not None:
+            if action_mask is not None and masks_per_track and \
+                    masks_per_track.get(target_id) is not None:
+                contact_score = mask_overlap_fraction(
+                    action_mask, masks_per_track[target_id]
+                )
+                landed = contact_score >= 0.10
+            elif target_id == "bag" and bag_box is not None:
+                contact_score = iou(action_box, bag_box)
+                landed = contact_score >= 0.10
+            else:
+                target_box = tracks.get(target_id, {}).get("box")
+                if target_box is not None:
+                    contact_score = iou(action_box, target_box)
+                    landed = contact_score >= 0.10
+
         return AttributedAction(
             action_id=action_id, action_class=action_class,
             owner_id=owner_id, target_id=target_id, confidence=confidence,
             reason="ok", method=method,
+            landed=landed, contact_score=float(contact_score),
         )

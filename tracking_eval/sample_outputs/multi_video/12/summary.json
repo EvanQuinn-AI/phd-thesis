@@ -1,0 +1,76 @@
+{
+  "video": "Combat Sports Automation PvP/data/12.mp4",
+  "frames": 745,
+  "id1_visible_frames": 716,
+  "id2_visible_frames": 712,
+  "clinch_events": 9,
+  "anchored": true,
+  "mask_mode": "none",
+  "frames_with_masks": 0,
+  "analytics": {
+    "fps": 29.938301647700534,
+    "total_frames": 745,
+    "duration_seconds": 24.88451111111111,
+    "fighters": {
+      "1": {
+        "throws_total": 75,
+        "throws_by_class": {
+          "cross": 20,
+          "hook": 5,
+          "kick": 50
+        },
+        "landed_total": 35,
+        "landed_by_class": {
+          "kick": 30,
+          "cross": 2,
+          "hook": 3
+        },
+        "hit_rate": 0.4666666666666667,
+        "throws_per_minute": 180.83537908007037,
+        "shots_received_total": 16,
+        "shots_received_by_class": {
+          "kick": 16
+        },
+        "guards_active_frames": 295,
+        "time_in_clinch_frames": 56,
+        "time_in_clinch_seconds": 1.870513586875466,
+        "travel_distance_px": 4428.740822812557,
+        "mean_centroid_speed_pps": 185.43913101097584,
+        "peak_centroid_speed_pps": 4202.04087787227,
+        "mean_wrist_speed_pps": 1078.006204801843
+      },
+      "2": {
+        "throws_total": 30,
+        "throws_by_class": {
+          "cross": 12,
+          "kick": 16,
+          "hook": 2
+        },
+        "landed_total": 16,
+        "landed_by_class": {
+          "kick": 16
+        },
+        "hit_rate": 0.5333333333333333,
+        "throws_per_minute": 72.33415163202814,
+        "shots_received_total": 35,
+        "shots_received_by_class": {
+          "kick": 30,
+          "cross": 2,
+          "hook": 3
+        },
+        "guards_active_frames": 295,
+        "time_in_clinch_frames": 56,
+        "time_in_clinch_seconds": 1.870513586875466,
+        "travel_distance_px": 3677.296917614489,
+        "mean_centroid_speed_pps": 154.8411031894543,
+        "peak_centroid_speed_pps": 4431.728275214544,
+        "mean_wrist_speed_pps": 916.8389111131912
+      }
+    },
+    "engagement": {
+      "mean_distance_between_fighters_px": 148.92984585246236,
+      "frames_within_strike_range": 683,
+      "strike_range_threshold_px": 263.25956772736674
+    }
+  }
+}

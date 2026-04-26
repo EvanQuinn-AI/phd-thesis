@@ -1,0 +1,56 @@
+{
+  "video": "Combat Sports Automation Tool/data/9.mp4",
+  "frames": 558,
+  "id1_visible_frames": 0,
+  "id2_visible_frames": 0,
+  "clinch_events": 0,
+  "anchored": true,
+  "mask_mode": "none",
+  "frames_with_masks": 0,
+  "analytics": {
+    "fps": 30.530218854615445,
+    "total_frames": 558,
+    "duration_seconds": 18.276973468719294,
+    "fighters": {
+      "1": {
+        "throws_total": 0,
+        "throws_by_class": {},
+        "landed_total": 0,
+        "landed_by_class": {},
+        "hit_rate": 0.0,
+        "throws_per_minute": 0.0,
+        "shots_received_total": 0,
+        "shots_received_by_class": {},
+        "guards_active_frames": 110,
+        "time_in_clinch_frames": 0,
+        "time_in_clinch_seconds": 0.0,
+        "travel_distance_px": 0.0,
+        "mean_centroid_speed_pps": 0.0,
+        "peak_centroid_speed_pps": 0.0,
+        "mean_wrist_speed_pps": 0.0
+      },
+      "2": {
+        "throws_total": 0,
+        "throws_by_class": {},
+        "landed_total": 0,
+        "landed_by_class": {},
+        "hit_rate": 0.0,
+        "throws_per_minute": 0.0,
+        "shots_received_total": 0,
+        "shots_received_by_class": {},
+        "guards_active_frames": 110,
+        "time_in_clinch_frames": 0,
+        "time_in_clinch_seconds": 0.0,
+        "travel_distance_px": 0.0,
+        "mean_centroid_speed_pps": 0.0,
+        "peak_centroid_speed_pps": 0.0,
+        "mean_wrist_speed_pps": 0.0
+      }
+    },
+    "engagement": {
+      "mean_distance_between_fighters_px": 0.0,
+      "frames_within_strike_range": 0,
+      "strike_range_threshold_px": 258.3900926893289
+    }
+  }
+}

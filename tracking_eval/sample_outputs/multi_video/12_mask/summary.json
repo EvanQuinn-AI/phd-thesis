@@ -1,0 +1,71 @@
+{
+  "video": "Combat Sports Automation PvP/data/12.mp4",
+  "frames": 120,
+  "id1_visible_frames": 91,
+  "id2_visible_frames": 91,
+  "clinch_events": 1,
+  "anchored": true,
+  "mask_mode": "grabcut",
+  "frames_with_masks": 120,
+  "analytics": {
+    "fps": 29.938301647700534,
+    "total_frames": 120,
+    "duration_seconds": 4.008243400447427,
+    "fighters": {
+      "1": {
+        "throws_total": 20,
+        "throws_by_class": {
+          "cross": 9,
+          "hook": 1,
+          "kick": 10
+        },
+        "landed_total": 10,
+        "landed_by_class": {
+          "kick": 10
+        },
+        "hit_rate": 0.5,
+        "throws_per_minute": 299.38301647700536,
+        "shots_received_total": 1,
+        "shots_received_by_class": {
+          "kick": 1
+        },
+        "guards_active_frames": 72,
+        "time_in_clinch_frames": 6,
+        "time_in_clinch_seconds": 0.20041217002237136,
+        "travel_distance_px": 636.9941529268832,
+        "mean_centroid_speed_pps": 211.89470109051678,
+        "peak_centroid_speed_pps": 1213.2402088569959,
+        "mean_wrist_speed_pps": 1212.4155144784422
+      },
+      "2": {
+        "throws_total": 5,
+        "throws_by_class": {
+          "cross": 4,
+          "kick": 1
+        },
+        "landed_total": 1,
+        "landed_by_class": {
+          "kick": 1
+        },
+        "hit_rate": 0.2,
+        "throws_per_minute": 74.84575411925134,
+        "shots_received_total": 10,
+        "shots_received_by_class": {
+          "kick": 10
+        },
+        "guards_active_frames": 72,
+        "time_in_clinch_frames": 6,
+        "time_in_clinch_seconds": 0.20041217002237136,
+        "travel_distance_px": 736.3331638171613,
+        "mean_centroid_speed_pps": 244.93960412848728,
+        "peak_centroid_speed_pps": 1806.808129128487,
+        "mean_wrist_speed_pps": 1199.4631411605496
+      }
+    },
+    "engagement": {
+      "mean_distance_between_fighters_px": 151.71972826799285,
+      "frames_within_strike_range": 91,
+      "strike_range_threshold_px": 263.25956772736674
+    }
+  }
+}
