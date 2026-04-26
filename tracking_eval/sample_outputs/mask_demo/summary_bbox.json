@@ -1,0 +1,10 @@
+{
+  "video": "Combat Sports Automation PvP/data/12.mp4",
+  "frames": 100,
+  "id1_visible_frames": 71,
+  "id2_visible_frames": 71,
+  "clinch_events": 1,
+  "anchored": true,
+  "mask_mode": "none",
+  "frames_with_masks": 0
+}

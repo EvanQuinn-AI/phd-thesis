@@ -31,6 +31,7 @@ _THESIS_ROOT = _HERE.parent
 if str(_THESIS_ROOT) not in sys.path:
     sys.path.insert(0, str(_THESIS_ROOT))
 
+from tracking.masks import extract_yolo_seg_masks, grabcut_mask  # noqa: E402
 from tracking.occlusion import ClinchDetector  # noqa: E402
 from tracking.ownership import ActionOwnership  # noqa: E402
 from tracking.person_filter import PersonFilter  # noqa: E402
@@ -169,7 +170,35 @@ def _draw_track(frame, tid, box, conf=None):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 
-def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
+def _per_person_masks(model_results, frame, person_dets, frame_shape,
+                      mask_mode: str) -> Optional[list]:
+    """Build per-detection masks. Returns None when ``mask_mode='none'`` or
+    no mask source is available. Order matches ``person_dets``.
+
+    ``mask_mode`` values:
+        - "none": no masks (back-compat).
+        - "yolo_seg": pull from a YOLOv26-seg results object. Returns None
+          if the model is detection-only.
+        - "grabcut": synthesise per-bbox masks via OpenCV GrabCut. Slow
+          (~50-200 ms/frame total) but useful as a stand-in until a
+          segmentation model is trained.
+    """
+    if mask_mode == "none":
+        return None
+    if mask_mode == "yolo_seg":
+        return extract_yolo_seg_masks(model_results, frame_shape)
+    if mask_mode == "grabcut":
+        out = []
+        for box in person_dets:
+            m = grabcut_mask(frame, box, num_iters=2)
+            out.append(m)
+        return out
+    raise ValueError(f"unknown mask_mode: {mask_mode}")
+
+
+def run_pvp(video_path: str, weights: str, out_dir: str,
+            mask_mode: str = "none",
+            max_frames: Optional[int] = None) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     base = Path(video_path).stem
 
@@ -198,8 +227,11 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
     clinch_events = 0
     in_clinch = False
     fi = 0
+    mask_frames = 0  # number of frames where any per-person mask was used
 
     while True:
+        if max_frames is not None and fi >= max_frames:
+            break
         ret, frame = cap.read()
         if not ret:
             break
@@ -209,6 +241,13 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
         # Pre-filter referees / background. landmarks computed AFTER filtering
         # to avoid wasting MediaPipe inference on dropped detections.
         person, _, filter_decisions = person_filter.filter(person_raw)
+
+        # Per-person masks (optional).
+        masks_per_person = _per_person_masks(
+            None, frame, person, frame.shape[:2], mask_mode,
+        )
+        if masks_per_person and any(m is not None for m in masks_per_person):
+            mask_frames += 1
 
         landmarks_per_person: list = [None] * len(person)
         if pose is not None and person:
@@ -229,7 +268,8 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
                            lm[name][2]) for name in lm
                 }
 
-        tracker.update(frame, person, landmarks_per_person)
+        tracker.update(frame, person, landmarks_per_person,
+                       masks_per_person=masks_per_person)
         slot_boxes = {tid: tracker.slots[tid].bbox for tid in ("1", "2")}
         state = clinch.observe(fi, slot_boxes, num_person_detections=len(person))
         if state.active and not in_clinch:
@@ -281,6 +321,8 @@ def run_pvp(video_path: str, weights: str, out_dir: str) -> dict:
         "id2_visible_frames": sum(1 for r in log_rows if r["id2_box"] is not None),
         "clinch_events": clinch_events,
         "anchored": tracker.anchored,
+        "mask_mode": mask_mode,
+        "frames_with_masks": mask_frames,
     }
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
@@ -368,9 +410,22 @@ def main():
     p.add_argument("--weights", required=True)
     p.add_argument("--mode", choices=("pve", "pvp"), required=True)
     p.add_argument("--out-dir", default="runs/tracking_v2")
+    p.add_argument(
+        "--mask-mode", choices=("none", "yolo_seg", "grabcut"), default="none",
+        help=("Mask source. 'none' = bbox-only (legacy). 'yolo_seg' = pull "
+              "masks from a YOLO segmentation results object. 'grabcut' = "
+              "synthesise per-bbox masks via GrabCut (slow, no training "
+              "required, useful for A/B comparison)."),
+    )
+    p.add_argument(
+        "--max-frames", type=int, default=None,
+        help="Cap the number of frames processed; useful for slow modes like grabcut.",
+    )
     args = p.parse_args()
     if args.mode == "pvp":
-        summary = run_pvp(args.video, args.weights, args.out_dir)
+        summary = run_pvp(args.video, args.weights, args.out_dir,
+                          mask_mode=args.mask_mode,
+                          max_frames=args.max_frames)
     else:
         summary = run_pve(args.video, args.weights, args.out_dir)
     print(json.dumps(summary, indent=2))
