@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 
 from tracking.kalman import iou
+from tracking.masks import mask_overlap_fraction
 
 
 _TERMINAL_KEYPOINT = {
@@ -38,7 +39,7 @@ class AttributedAction:
     target_id: Optional[str]
     confidence: float
     reason: str
-    method: str  # "kinematic" | "centroid_fallback" | "unattributed"
+    method: str  # "mask_iou" | "kinematic" | "centroid_fallback" | "unattributed"
 
 
 def _action_centre(action_box: tuple) -> tuple[int, int]:
@@ -105,13 +106,29 @@ class ActionOwnership:
         tracks: dict,
         landmarks_per_track: dict,
         bag_box: Optional[tuple] = None,
+        action_mask: Optional[np.ndarray] = None,
+        masks_per_track: Optional[dict] = None,
+        bag_mask: Optional[np.ndarray] = None,
     ) -> AttributedAction:
         """Assign owner + target.
+
+        Three-tier rule, in precedence order:
+
+            1. **mask_iou**  — owner = arg max_k |action_mask ∩ mask_k| / |action_mask|.
+               Requires the action mask AND at least two track masks.
+            2. **kinematic** — owner = track whose terminal keypoint is closest
+               to the action centre. Requires pose landmarks for at least one
+               track.
+            3. **centroid_fallback** — owner = track whose bbox uniquely
+               contains the action-box centroid.
 
         Args:
             tracks: ``{tid: {"box": ...}}`` – matches the legacy ``tracked`` shape.
             landmarks_per_track: ``{tid: landmark_dict or None}``.
             bag_box: optional bag bbox for PvE-style action targeting.
+            action_mask: optional segmentation mask for the action detection.
+            masks_per_track: optional ``{tid: mask}`` for each fighter.
+            bag_mask: optional bag mask.
         """
         # Suppress during clinch.
         if self.clinch is not None and self.clinch.state.active:
@@ -125,74 +142,101 @@ class ActionOwnership:
         frame_w, frame_h = frame_size
         keypoint_names = _TERMINAL_KEYPOINT.get(action_class, ("left_wrist", "right_wrist"))
 
-        # Kinematic-chain rule: pick the track whose terminal keypoint is
-        # closest to the action centre.
-        best: Optional[tuple[float, str, tuple[int, int]]] = None
-        for tid, lm in landmarks_per_track.items():
-            if not lm:
-                continue
-            d = _terminal_distance(lm, keypoint_names, frame_w, frame_h,
-                                   action_centre, self.visibility_thresh)
-            if d is None:
-                continue
-            distance, kp_xy = d
-            if best is None or distance < best[0]:
-                best = (distance, tid, kp_xy)
-
         owner_id: Optional[str]
         method: str
         confidence: float
-        terminal_xy: Optional[tuple[int, int]]
+        terminal_xy: Optional[tuple[int, int]] = action_centre
 
-        if best is not None:
-            distance, owner_id, terminal_xy = best
-            # Confidence falls off with distance, normalised by frame diagonal.
-            diag = float(np.hypot(frame_w, frame_h))
-            confidence = max(0.0, 1.0 - distance / (0.25 * diag))
-            method = "kinematic"
+        # Tier 1: mask-IoU best-fit.
+        mask_owner = None
+        if action_mask is not None and masks_per_track:
+            scored = []
+            for tid, m in masks_per_track.items():
+                if m is None:
+                    continue
+                frac = mask_overlap_fraction(action_mask, m)
+                scored.append((frac, tid))
+            scored.sort(reverse=True)
+            if scored and scored[0][0] > 0.0:
+                mask_owner = scored[0]
+
+        if mask_owner is not None:
+            owner_id = mask_owner[1]
+            confidence = float(mask_owner[0])  # fraction in [0, 1]
+            method = "mask_iou"
         else:
-            # Fallback: legacy centroid containment.
-            containers = [tid for tid, t in tracks.items()
-                          if _box_contains(t.get("box"), *action_centre)]
-            if len(containers) == 1:
-                owner_id = containers[0]
-                confidence = 0.5
-                method = "centroid_fallback"
-                terminal_xy = action_centre
-            else:
-                return AttributedAction(
-                    action_id=action_id, action_class=action_class,
-                    owner_id=None, target_id=None, confidence=0.0,
-                    reason="ambiguous_centroid", method="unattributed",
-                )
+            # Tier 2: kinematic-chain rule.
+            best: Optional[tuple[float, str, tuple[int, int]]] = None
+            for tid, lm in landmarks_per_track.items():
+                if not lm:
+                    continue
+                d = _terminal_distance(lm, keypoint_names, frame_w, frame_h,
+                                       action_centre, self.visibility_thresh)
+                if d is None:
+                    continue
+                distance, kp_xy = d
+                if best is None or distance < best[0]:
+                    best = (distance, tid, kp_xy)
 
-        # Target inference: among non-owner candidates (other tracks + bag),
-        # score by direct overlap with action_box AND inverse distance from
-        # action centre to candidate bbox centre. Highest score wins;
-        # ``None`` only if no candidates exist.
+            if best is not None:
+                distance, owner_id, terminal_xy = best
+                diag = float(np.hypot(frame_w, frame_h))
+                confidence = max(0.0, 1.0 - distance / (0.25 * diag))
+                method = "kinematic"
+            else:
+                # Tier 3: legacy centroid containment.
+                containers = [tid for tid, t in tracks.items()
+                              if _box_contains(t.get("box"), *action_centre)]
+                if len(containers) == 1:
+                    owner_id = containers[0]
+                    confidence = 0.5
+                    method = "centroid_fallback"
+                    terminal_xy = action_centre
+                else:
+                    return AttributedAction(
+                        action_id=action_id, action_class=action_class,
+                        owner_id=None, target_id=None, confidence=0.0,
+                        reason="ambiguous_centroid", method="unattributed",
+                    )
+
+        # Target inference. With masks, target = candidate whose mask the
+        # action mask overlaps most (excluding the owner). Without masks,
+        # fall back to bbox-IoU + inverse distance to centroid.
         target_id: Optional[str] = None
-        diag = float(np.hypot(frame_w, frame_h))
-        candidates: list[tuple[float, str]] = []
-        for tid, t in tracks.items():
-            if tid == owner_id:
-                continue
-            box = t.get("box")
-            if box is None:
-                continue
-            cx = (box[0] + box[2]) / 2
-            cy = (box[1] + box[3]) / 2
-            dist = float(np.hypot(cx - action_centre[0], cy - action_centre[1]))
-            score = iou(action_box, box) + max(0.0, 1.0 - dist / diag)
-            candidates.append((score, tid))
-        if bag_box is not None:
-            cx = (bag_box[0] + bag_box[2]) / 2
-            cy = (bag_box[1] + bag_box[3]) / 2
-            dist = float(np.hypot(cx - action_centre[0], cy - action_centre[1]))
-            score = iou(action_box, bag_box) + max(0.0, 1.0 - dist / diag)
-            candidates.append((score, "bag"))
-        candidates.sort(reverse=True)
-        if candidates and candidates[0][0] > 0:
-            target_id = candidates[0][1]
+        if action_mask is not None and (masks_per_track or bag_mask is not None):
+            scored: list[tuple[float, str]] = []
+            for tid, m in (masks_per_track or {}).items():
+                if tid == owner_id or m is None:
+                    continue
+                scored.append((mask_overlap_fraction(action_mask, m), tid))
+            if bag_mask is not None and "bag" != owner_id:
+                scored.append((mask_overlap_fraction(action_mask, bag_mask), "bag"))
+            scored.sort(reverse=True)
+            if scored and scored[0][0] > 0:
+                target_id = scored[0][1]
+        else:
+            diag = float(np.hypot(frame_w, frame_h))
+            candidates: list[tuple[float, str]] = []
+            for tid, t in tracks.items():
+                if tid == owner_id:
+                    continue
+                box = t.get("box")
+                if box is None:
+                    continue
+                cx = (box[0] + box[2]) / 2
+                cy = (box[1] + box[3]) / 2
+                dist = float(np.hypot(cx - action_centre[0], cy - action_centre[1]))
+                score = iou(action_box, box) + max(0.0, 1.0 - dist / diag)
+                candidates.append((score, tid))
+            if bag_box is not None:
+                cx = (bag_box[0] + bag_box[2]) / 2
+                cy = (bag_box[1] + bag_box[3]) / 2
+                dist = float(np.hypot(cx - action_centre[0], cy - action_centre[1]))
+                score = iou(action_box, bag_box) + max(0.0, 1.0 - dist / diag)
+                candidates.append((score, "bag"))
+            candidates.sort(reverse=True)
+            if candidates and candidates[0][0] > 0:
+                target_id = candidates[0][1]
 
         return AttributedAction(
             action_id=action_id, action_class=action_class,
