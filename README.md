@@ -1,6 +1,6 @@
 # 🥊 Combat Sports Automation
 
-An AI-powered video analysis system for combat sports training, featuring real-time object detection, action recognition, and tactical insights using YOLOv11, Transformer models, and LLM analysis.
+An AI-powered video analysis system for combat sports training, featuring real-time object detection, action recognition, and tactical insights using YOLOv, Transformer models, and LLM analysis.
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8+-orange.svg)](https://pytorch.org/)
